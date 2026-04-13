@@ -4,7 +4,7 @@
     "@modelcontextprotocol/server-filesystem": "2026.1.14",
     "@modelcontextprotocol/server-memory": "2026.1.26",
     "@modelcontextprotocol/server-sequential-thinking": "2025.12.18",
-    "@opencode-ai/plugin": "XK-1.0",
+    "@opencode-ai/plugin": "1.4.3",
     "@upstash/context7-mcp": "2.1.7",
     "@wonderwhy-er/desktop-commander": "^0.2.38"
   }
