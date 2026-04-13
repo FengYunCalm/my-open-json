@@ -1,0 +1,12 @@
+{
+  "bridgeBaseUrl": "http://127.0.0.1:8765",
+  "minSearchChars": 16,
+  "maxInjectedChars": 1800,
+  "autoFlushOnIdle": true,
+  "autoFlushOnCompact": true,
+  "ensureBridgeCommand": [
+    "bash",
+    "-lc",
+    "systemctl --user start mempalace-bridge.service"
+  ]
+}

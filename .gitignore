@@ -1,0 +1,9 @@
+node_modules/
+.ruff_cache/
+__pycache__/
+logs/
+*.log
+*.sqlite
+*.pyc
+mcp/mempalace_bridge_state.json
+bun.lock

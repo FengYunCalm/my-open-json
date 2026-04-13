@@ -1,0 +1,8 @@
+node_modules
+logs
+
+dist
+dist_old
+cache
+.aider*
+dist-binary

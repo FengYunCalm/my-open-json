@@ -1,0 +1,19 @@
+{
+  "a2a": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 0,
+    "basePath": "/a2a",
+    "healthPath": "/health",
+    "readyPath": "/ready"
+  },
+  "runtime": {
+    "databasePath": "/home/mechrevo/.config/opencode/plugins/opencode-a2a-relay.sqlite",
+    "injectViaNoReply": true,
+    "compactionContextLimit": 20
+  },
+  "routing": {
+    "mode": "pair",
+    "pairs": []
+  }
+}
