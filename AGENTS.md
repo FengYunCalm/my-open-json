@@ -94,8 +94,7 @@
 ### Skill 工作流
 
 - 当前全局 skill 已经过筛选：默认保留可直接在 OpenCode 使用、依赖清晰、无断链的 skill；对有前置条件的 skill，使用前先检查其本地说明。
-- `superpowers` 当前通过本地 `plugins/superpowers.js` + 本地 `skills/using-superpowers/` 注入，不再依赖缓存包版本。
-- 当前全局插件已启用 `plugins/tool-forced-eval.js`，会在非 slash command 的用户消息前自动插入“先评估 skill、再评估 MCP、再激活、再执行”的强制评估指令，并补强重点 MCP 工具描述；它用于提高 skill / MCP 使用率，不替代实际判断。
+- 当前全局插件已启用 `plugins/tool-forced-eval.js`，由它统一承担本地 skill / MCP 工作流策略注入、skill 复用窗口控制，以及重点 MCP 工具描述补强；它用于提高 skill / MCP 使用率，不替代实际判断。
 - `openspec-*` skill 现在依赖本机已安装的 `openspec` CLI；若任务适合规格驱动流程，优先按 OpenSpec 工作流执行，而不是手工拼流程。
 - `brainstorming`、`writing-plans`、`executing-plans`、`writing-skills` 等流程型 skill 默认使用项目内文档路径；除非项目自己约定，不要再默认写入 `docs/superpowers/`。
 

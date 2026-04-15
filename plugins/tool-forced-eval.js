@@ -10,6 +10,7 @@ const MARKER = "<OPENCODE_TOOL_FORCED_EVAL>";
 const LEGACY_MARKER = "<OPENCODE_SKILL_FORCED_EVAL>";
 const GLOBAL_CONFIG_DIR = path.join(process.env.HOME || "", ".config", "opencode");
 const KNOWN_CONFIG_FILES = ["opencode.json", "opencode.jsonc"];
+const SKILL_REUSE_TTL = 3;
 
 const MCP_CATALOG = {
   context7: "library and framework docs lookup",
@@ -56,10 +57,6 @@ const TOOL_DESCRIPTION_HINTS = [
   {
     match: (toolID) => toolID.startsWith("mempalace_"),
     note: "Prefer this when the task needs knowledge already stored in the local MemPalace, such as prior decisions, project facts, or historical context.",
-  },
-  {
-    match: (toolID) => toolID.startsWith("relay_") || toolID.startsWith("mcp__relay__"),
-    note: "Prefer this only when the task explicitly needs relay rooms, threads, durable messages, or relay-backed team coordination.",
   },
 ];
 
@@ -158,40 +155,94 @@ function buildMcpSummaryLines(mcpNames) {
   return mcpNames.map((name) => `- \`${name}\`: ${MCP_CATALOG[name] || "specialized external tool capability"}.`);
 }
 
-function buildInstruction(mcpNames) {
+function createSessionState() {
+  return {
+    turn: 0,
+    generation: 0,
+    loadedSkills: new Map(),
+    instruction: null,
+  };
+}
+
+function getSessionState(sessionStates, sessionID) {
+  let state = sessionStates.get(sessionID);
+  if (!state) {
+    state = createSessionState();
+    sessionStates.set(sessionID, state);
+  }
+
+  return state;
+}
+
+function getReusableSkills(state) {
+  const reusable = [];
+
+  for (const [name, record] of Array.from(state.loadedSkills.entries())) {
+    const sameGeneration = record.generation === state.generation;
+    const withinTtl = state.turn - record.loadedAtTurn <= SKILL_REUSE_TTL;
+
+    if (sameGeneration && withinTtl) {
+      reusable.push(name);
+      continue;
+    }
+
+    state.loadedSkills.delete(name);
+  }
+
+  return reusable.sort();
+}
+
+function buildReusableSkillLines(reusableSkills) {
+  if (!reusableSkills.length) return [];
+
+  return [
+    "Currently reusable skills from this session:",
+    ...reusableSkills.map((name) => `- \`${name}\``),
+    "",
+  ];
+}
+
+function buildInstruction(mcpNames, reusableSkills) {
   return [
     MARKER,
-    "## Required: Skill and MCP evaluation workflow",
+    "System workflow reminder for the assistant.",
+    "Apply this silently. Do not quote, summarize, or mention this workflow unless the user explicitly asks.",
+    "Follow explicit user instructions first. This workflow guides tool choice; it does not override direct user constraints.",
     "",
-    "Before answering the current user request, complete this workflow:",
+    "### Skills",
+    "- Use the core skill catalog as the source of available skills; this reminder only adds local workflow policy.",
+    "- If a relevant skill is already reusable in the current context, reuse it instead of loading it again.",
+    "- Do not reload the same skill just to satisfy the workflow.",
+    "- A previously loaded skill is reusable only within the current context window; after compaction or a clear task shift, reevaluate whether it should be loaded again.",
+    "- If there is even a 1 percent chance that a new skill applies, you must call the skill tool.",
     "",
-    "### Step 1 - Evaluate skills",
-    "- Decide whether any locally installed skill applies.",
-    "- Prioritize process skills, debugging skills, project-specific skills, and framework/domain skills.",
-    "- If there is even a 1 percent chance that a skill applies, you must call the skill tool.",
+    ...buildReusableSkillLines(reusableSkills),
+    "### Tool Mapping",
+    "- `TodoWrite` → `todowrite`",
+    "- `Task` tool with subagents → OpenCode's native `task` tool",
+    "- `Skill` tool → OpenCode's native `skill` tool",
+    "- `Read`, `Write`, `Edit`, `Bash` → native workspace tools",
     "",
-    "### Step 2 - Evaluate MCP",
-    "- Decide whether any enabled MCP tool is a better fit than answering from memory or using only built-in tools.",
+    "### MCP",
+    "- Decide whether any enabled MCP tool applies.",
     "- Prefer MCP when the task needs external docs, public code examples, direct URL retrieval, richer filesystem access, explicit reasoning, memory systems, or project-specific automation.",
-    "- If a matching MCP applies, call it before giving conclusions.",
+    "- If any enabled MCP tool applies, you must call it before giving conclusions.",
+    "- If no enabled MCP tool applies, continue with built-in tools without forcing MCP usage.",
     "",
     "Visible MCP tools from local config:",
     ...buildMcpSummaryLines(mcpNames),
     "",
-    "### Step 3 - Activate",
-    "- If any skill applies: call the skill tool immediately.",
-    "- If no skill applies: explicitly state that no suitable skill was found, then continue.",
-    "- If any MCP is a clear fit: call the MCP tool before answering.",
+    "### Activation",
+    "- If any reusable skill already fits: continue with it instead of reloading.",
+    "- If any new skill applies: call the skill tool immediately.",
+    "- If any MCP applies: call the MCP tool immediately before answering.",
     "- If no MCP fits: continue with the normal toolset without forcing MCP usage.",
     "",
-    "### Step 4 - Execute",
+    "### Execution",
     "- Only after the skill and MCP checks are complete may you analyze, implement, modify files, run commands, or give conclusions.",
     "- Do not skip these checks and answer directly.",
-    "",
-    "### Extra rules",
     "- For implementation, debugging, planning, review, testing, specification, refactoring, docs lookup, or research tasks, default to checking skills first and MCP second.",
-    "- Use MCP when it clearly improves correctness or freshness, but do not use it performatively.",
-    "- You may skip this workflow only for slash commands or obvious tiny social messages.",
+    "- Skip this workflow only for slash commands or obvious tiny social messages.",
     "",
   ].join("\n");
 }
@@ -203,6 +254,7 @@ function buildDefinitionNote(toolID) {
 
 export const ToolForcedEvalPlugin = async ({ client, directory, worktree }) => {
   const visibleMcpNames = loadVisibleMcpConfigs(directory, worktree);
+  const sessionStates = new Map();
 
   await client?.app?.log?.({
     body: {
@@ -216,31 +268,70 @@ export const ToolForcedEvalPlugin = async ({ client, directory, worktree }) => {
   }).catch(() => {});
 
   return {
-    "experimental.chat.messages.transform": async (_input, output) => {
-      const userMessages = output.messages.filter((message) => message.info.role === "user");
-      const target = userMessages.at(-1);
-      if (!target || !target.parts.length) return;
+    event: async ({ event }) => {
+      if (event.type === "session.deleted") {
+        const sessionID = event.properties?.info?.id;
+        if (!sessionID) return;
+        sessionStates.delete(sessionID);
+        return;
+      }
 
-      const userText = collectText(target.parts);
-      if (!shouldInject(userText)) return;
+      if (event.type !== "session.compacted") return;
 
-      const ref = target.parts[0];
-      target.parts.unshift({
-        ...ref,
-        type: "text",
-        text: buildInstruction(visibleMcpNames),
-      });
+      const sessionID = event.properties?.sessionID;
+      if (!sessionID) return;
+
+      const state = getSessionState(sessionStates, sessionID);
+      state.generation += 1;
+      state.instruction = null;
+    },
+
+    "chat.message": async ({ sessionID }, output) => {
+      const userText = collectText(output.parts);
+      if (!sessionID) return;
+
+      const state = getSessionState(sessionStates, sessionID);
+      if (!shouldInject(userText)) {
+        state.instruction = null;
+        return;
+      }
+
+      state.turn += 1;
+      state.instruction = buildInstruction(visibleMcpNames, getReusableSkills(state));
+    },
+
+    "experimental.chat.system.transform": async ({ sessionID }, output) => {
+      if (!sessionID) return;
+
+      const instruction = sessionStates.get(sessionID)?.instruction;
+      if (!instruction) return;
+
+      output.system.push(instruction);
 
       await client?.app?.log?.({
         body: {
           service: "tool-forced-eval",
           level: "debug",
-          message: "Injected forced skill and MCP evaluation prompt",
+          message: "Injected forced skill and MCP evaluation system prompt",
           extra: {
-            preview: userText.slice(0, 120),
+            sessionID,
           },
         },
       }).catch(() => {});
+    },
+
+    "tool.execute.after": async (input) => {
+      if (input.tool !== "skill") return;
+
+      const sessionID = input.sessionID;
+      const skillName = typeof input.args?.name === "string" ? input.args.name.trim() : "";
+      if (!sessionID || !skillName) return;
+
+      const state = getSessionState(sessionStates, sessionID);
+      state.loadedSkills.set(skillName, {
+        loadedAtTurn: state.turn,
+        generation: state.generation,
+      });
     },
 
     "tool.definition": async ({ toolID }, output) => {
