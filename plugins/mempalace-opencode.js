@@ -8,6 +8,7 @@ import {
   messagesSinceCheckpoint,
   shouldSearch,
 } from './mempalace-opencode.helpers.mjs'
+import { ensureBridge } from './mempalace-bridge-manager.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -17,11 +18,8 @@ const DEFAULTS = {
   maxInjectedChars: 1800,
   autoFlushOnIdle: true,
   autoFlushOnCompact: true,
+  healthcheckCacheTtlMs: 1000,
   ensureBridgeCommand: ['bash', '-lc', 'systemctl --user start mempalace-bridge.service'],
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function loadConfig() {
@@ -53,35 +51,6 @@ async function fetchJson(baseUrl, pathname, options = {}) {
   return response.json()
 }
 
-async function healthcheck(baseUrl) {
-  const response = await fetch(`${baseUrl}/health`)
-  if (!response.ok) return false
-  const payload = await response.json()
-  return payload.ok === true
-}
-
-async function ensureBridge(config, client) {
-  if (await healthcheck(config.bridgeBaseUrl).catch(() => false)) return true
-  if (Array.isArray(config.ensureBridgeCommand) && config.ensureBridgeCommand.length) {
-    try {
-      const proc = Bun.spawn({
-        cmd: config.ensureBridgeCommand,
-        stdout: 'ignore',
-        stderr: 'ignore',
-      })
-      await proc.exited
-    } catch (error) {
-      await log(client, 'warn', 'Failed to run ensureBridgeCommand', { error: String(error) })
-    }
-  }
-  for (const delay of [250, 500, 1000]) {
-    await sleep(delay)
-    if (await healthcheck(config.bridgeBaseUrl).catch(() => false)) return true
-  }
-  await log(client, 'warn', 'MemPalace bridge is unavailable after startup attempt')
-  return false
-}
-
 async function getMessages(client, sessionID) {
   const result = await client.session.messages({ path: { id: sessionID } })
   if (result.error) throw new Error(`session.messages failed for ${sessionID}`)
@@ -93,6 +62,8 @@ export const MempalaceOpencodePlugin = async ({ client, directory, worktree }) =
   const sessions = new Map()
 
   const getDirectory = (sessionID) => sessions.get(sessionID)?.directory ?? worktree ?? directory
+
+  await ensureBridge(config, client)
 
   async function flushSession(sessionID, reason) {
     if (!(await ensureBridge(config, client))) return null
@@ -177,7 +148,7 @@ export const MempalaceOpencodePlugin = async ({ client, directory, worktree }) =
       if (!search) return
       sessions.set(sessionID, {
         ...current,
-        systemBlock: buildSystemBlock(search, config.maxInjectedChars),
+        systemBlock: search.system_block || buildSystemBlock(search, config.maxInjectedChars),
       })
     },
 

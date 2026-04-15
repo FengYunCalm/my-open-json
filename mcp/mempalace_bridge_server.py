@@ -36,15 +36,32 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
 
     @server.tool(name="mempalace_search")
     def mempalace_search(
-        query: str, limit: int = 5, wing: str | None = None, room: str | None = None
+        query: str,
+        limit: int = 5,
+        wing: str | None = None,
+        memory_tier: str | None = None,
+        current_only: bool = False,
+        historical_only: bool = False,
+        room: str | None = None,
     ) -> dict[str, Any]:
-        return core.mcp_search(query=query, limit=limit, wing=wing, room=room)
+        return core.mcp_search(
+            query=query,
+            limit=limit,
+            wing=wing,
+            memory_tier=memory_tier,
+            current_only=current_only,
+            historical_only=historical_only,
+            room=room,
+        )
 
     @server.tool(name="mempalace_list_drawers")
     def mempalace_list_drawers(
         wing: str | None = None,
         room: str | None = None,
         session_id: str | None = None,
+        memory_tier: str | None = None,
+        current_only: bool = False,
+        historical_only: bool = False,
         role: str | None = None,
         source_file: str | None = None,
         limit: int = 20,
@@ -54,6 +71,9 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
             wing=wing,
             room=room,
             session_id=session_id,
+            memory_tier=memory_tier,
+            current_only=current_only,
+            historical_only=historical_only,
             role=role,
             source_file=source_file,
             limit=limit,
@@ -72,12 +92,21 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
     @server.tool(name="mempalace_get_session_messages")
     def mempalace_get_session_messages(
         session_id: str,
+        memory_tier: str | None = None,
+        current_only: bool = False,
+        historical_only: bool = False,
         role: str | None = None,
         limit: int = 20,
         offset: int = 0,
     ) -> dict[str, Any]:
         return core.mcp_get_session_messages(
-            session_id=session_id, role=role, limit=limit, offset=offset
+            session_id=session_id,
+            memory_tier=memory_tier,
+            current_only=current_only,
+            historical_only=historical_only,
+            role=role,
+            limit=limit,
+            offset=offset,
         )
 
     @server.tool(name="mempalace_kg_query")
@@ -89,6 +118,12 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
     @server.custom_route("/health", methods=["GET"], include_in_schema=False)
     async def health_route(_request: Request):
         return JSONResponse(core.health())
+
+    @server.custom_route(
+        "/internal/debug/status", methods=["GET"], include_in_schema=False
+    )
+    async def debug_status_route(_request: Request):
+        return JSONResponse(core.debug_status())
 
     @server.custom_route(
         "/internal/session/start", methods=["POST"], include_in_schema=False

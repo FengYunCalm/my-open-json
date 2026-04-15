@@ -1,3 +1,5 @@
+import path from 'path'
+
 const SMALL_TALK = new Set(['ok', 'okay', 'yes', 'no', 'thanks', 'thank you', 'continue', 'start', 'go'])
 
 export function collectText(parts = []) {
@@ -30,7 +32,9 @@ export function buildSystemBlock(payload, maxChars = 1800) {
   ]
   let used = lines[0].length
   for (const [index, item] of payload.results.entries()) {
-    const header = `${index + 1}. [${Number(item.similarity ?? 0).toFixed(2)}] room=${item.room ?? 'unknown'} role=${item.role ?? 'unknown'} src=${item.source_file ?? '?'}`
+    const tier = item.search_tier ?? 'memory'
+    const drawer = item.drawer_id ?? '?'
+    const header = `${index + 1}. [${Number(item.similarity ?? 0).toFixed(2)}][${tier}] drawer=${drawer} room=${item.room ?? 'unknown'} role=${item.role ?? 'unknown'} src=${item.source_file ?? '?'}`
     if (used + header.length + 1 > maxChars) break
     lines.push(header)
     used += header.length + 1
@@ -46,4 +50,31 @@ export function buildSystemBlock(payload, maxChars = 1800) {
     used += body.length + 4
   }
   return lines.join('\n')
+}
+
+export function buildDirectBridgeLaunch(config = {}, env = process.env) {
+  const home = env.HOME?.trim()
+  if (!home) return null
+
+  const bridgeUrl = new URL(config.bridgeBaseUrl ?? 'http://127.0.0.1:8765')
+  const directBridgeCommand = Array.isArray(config.directBridgeCommand)
+    ? config.directBridgeCommand
+    : [
+        path.join(home, '.local', 'opt', 'mempalace-opencode', 'venv', 'bin', 'python'),
+        path.join(home, '.config', 'opencode', 'mcp', 'mempalace_bridge_server.py'),
+        '--host',
+        bridgeUrl.hostname,
+        '--port',
+        bridgeUrl.port || (bridgeUrl.protocol === 'https:' ? '443' : '80'),
+      ]
+
+  if (!directBridgeCommand.length) return null
+
+  return {
+    cmd: directBridgeCommand,
+    env: {
+      MEMPALACE_PALACE_PATH:
+        env.MEMPALACE_PALACE_PATH || path.join(home, '.mempalace', 'palace'),
+    },
+  }
 }

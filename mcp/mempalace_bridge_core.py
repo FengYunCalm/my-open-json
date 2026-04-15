@@ -12,6 +12,12 @@ import chromadb
 
 from mempalace.config import MempalaceConfig, sanitize_content, sanitize_name
 from mempalace.knowledge_graph import KnowledgeGraph
+from mempalace_memory_policy import (
+    classify_memory_tier,
+    derive_memory_key,
+    derive_memory_value,
+)
+from mempalace_session_state import SessionStateStore
 
 
 SKIP_TEXTS = {
@@ -26,6 +32,7 @@ SKIP_TEXTS = {
     "go",
 }
 VALID_ROLES = {"user", "assistant"}
+VALID_MEMORY_TIERS = {"working_session", "user_preference", "project_memory"}
 PREVIEW_CHARS = 200
 FETCH_BATCH_SIZE = 1000
 
@@ -45,11 +52,64 @@ def _sanitize_optional_role(value: str | None) -> str | None:
     return normalized
 
 
+def _sanitize_optional_memory_tier(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized not in VALID_MEMORY_TIERS:
+        raise ValueError(
+            "memory_tier must be one of: project_memory, user_preference, working_session"
+        )
+    return normalized
+
+
 def _preview_text(text: str, max_chars: int = PREVIEW_CHARS) -> str:
     collapsed = " ".join((text or "").split())
     if len(collapsed) <= max_chars:
         return collapsed
     return collapsed[: max_chars - 1] + "…"
+
+
+def _working_session_dedupe_hash(role: str, text: str) -> str:
+    normalized = " ".join((text or "").split()).strip().lower()
+    return hashlib.sha1(f"{role}\n{normalized}".encode("utf-8")).hexdigest()
+
+
+def _summary_sort_key(item: dict[str, Any]) -> tuple[int, str]:
+    metadata = item.get("metadata", {})
+    return (
+        _safe_order(metadata.get("session_order")) or 0,
+        item.get("message_id") or "",
+    )
+
+
+def _core_memory_sort_key(item: dict[str, Any]) -> tuple[int, int, float, str]:
+    tier_priority = {"user_preference": 0, "project_memory": 1}.get(
+        item.get("memory_tier"), 9
+    )
+    key_priority = {
+        "response_language": 0,
+        "response_detail": 1,
+        "code_change_permission": 2,
+        "implementation_mode_preference": 3,
+        "git_commit_behavior": 4,
+        "test_execution_behavior": 5,
+    }.get(item.get("memory_key"), 9)
+    scope_priority = int(item.get("_scope_priority", 9))
+    recency_text = item.get("valid_from") or item.get("filed_at") or ""
+    try:
+        recency = -datetime.fromisoformat(
+            recency_text.replace("Z", "+00:00")
+        ).timestamp()
+    except ValueError:
+        recency = 0.0
+    return (
+        tier_priority,
+        key_priority,
+        scope_priority,
+        recency,
+        item.get("message_id") or "",
+    )
 
 
 def _safe_similarity(distance: float | int | None) -> float:
@@ -95,31 +155,15 @@ class BridgeConfig:
     wing_config_path: Path | str = Path.home() / ".mempalace" / "wing_config.json"
     default_room: str = "opencode-session"
     search_limit: int = 5
+    core_memory_limit: int = 6
     max_block_chars: int = 2000
     min_meaningful_chars: int = 6
+    working_session_compact_threshold: int = 8
+    working_session_retain_count: int = 4
 
     def __post_init__(self):
         self.state_path = Path(self.state_path)
         self.wing_config_path = Path(self.wing_config_path)
-
-
-class StateStore:
-    def __init__(self, path: Path):
-        self.path = path
-
-    def load(self) -> dict[str, Any]:
-        if not self.path.exists():
-            return {"sessions": {}}
-        try:
-            return json.loads(self.path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return {"sessions": {}}
-
-    def save(self, state: dict[str, Any]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
-            json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
 
 
 class MempalaceBackend:
@@ -157,6 +201,8 @@ class MempalaceBackend:
         self,
         *,
         wing: str | None = None,
+        directory: str | None = None,
+        memory_tier: str | None = None,
         room: str | None = None,
         session_id: str | None = None,
         role: str | None = None,
@@ -165,6 +211,10 @@ class MempalaceBackend:
         conditions = []
         if wing is not None:
             conditions.append({"wing": wing})
+        if directory is not None:
+            conditions.append({"directory": directory})
+        if memory_tier is not None:
+            conditions.append({"memory_tier": memory_tier})
         if room is not None:
             conditions.append({"room": room})
         if session_id is not None:
@@ -220,10 +270,13 @@ class MempalaceBackend:
             "preview": _preview_text(text),
             "wing": metadata.get("wing", "unknown"),
             "room": metadata.get("room", "unknown"),
+            "directory": metadata.get("directory"),
             "source_file": metadata.get("source_file", ""),
             "session_id": metadata.get("session_id"),
             "message_id": metadata.get("message_id"),
             "role": metadata.get("role"),
+            "memory_tier": metadata.get("memory_tier"),
+            "dedupe_hash": metadata.get("dedupe_hash"),
             "filed_at": metadata.get("filed_at"),
             "distance": round(float(distance), 4) if distance is not None else None,
             "similarity": _safe_similarity(distance),
@@ -235,6 +288,10 @@ class MempalaceBackend:
         *,
         query: str | None = None,
         wing: str | None = None,
+        directory: str | None = None,
+        memory_tier: str | None = None,
+        current_only: bool = False,
+        historical_only: bool = False,
         room: str | None = None,
         session_id: str | None = None,
         role: str | None = None,
@@ -245,6 +302,8 @@ class MempalaceBackend:
         collection = self._collection_for()
         where = self._make_where(
             wing=wing,
+            directory=directory,
+            memory_tier=memory_tier,
             room=room,
             session_id=session_id,
             role=role,
@@ -272,6 +331,10 @@ class MempalaceBackend:
                     ids, documents, metadatas, distances
                 )
             ]
+            if current_only:
+                rows = [row for row in rows if not row.get("valid_to")]
+            elif historical_only:
+                rows = [row for row in rows if row.get("valid_to")]
             return rows[offset : offset + limit]
 
         kwargs = {
@@ -285,10 +348,15 @@ class MempalaceBackend:
         ids = result.get("ids", [])
         documents = result.get("documents", [])
         metadatas = result.get("metadatas", [])
-        return [
+        rows = [
             self._format_row(drawer_id=drawer_id, text=text, metadata=metadata)
             for drawer_id, text, metadata in zip(ids, documents, metadatas)
         ]
+        if current_only:
+            rows = [row for row in rows if not row.get("valid_to")]
+        elif historical_only:
+            rows = [row for row in rows if row.get("valid_to")]
+        return rows
 
     def search(self, query: str, wing: str | None, room: str | None, limit: int):
         return self.query_drawers(query=query, wing=wing, room=room, limit=limit)
@@ -331,6 +399,79 @@ class MempalaceBackend:
         collection.upsert(ids=[drawer_id], documents=[content], metadatas=[payload])
         return {"drawer_id": drawer_id, "wing": wing, "room": room, "metadata": payload}
 
+    def invalidate_memory_conflicts(
+        self,
+        *,
+        wing: str,
+        directory: str,
+        memory_tier: str,
+        memory_key: str,
+        valid_to: str,
+    ) -> int:
+        result = self._get_all(
+            include=["documents", "metadatas"],
+            where=self._make_where(
+                wing=wing,
+                directory=directory,
+                memory_tier=memory_tier,
+            ),
+        )
+        ids = result.get("ids", [])
+        documents = result.get("documents", [])
+        metadatas = result.get("metadatas", [])
+
+        update_ids = []
+        update_docs = []
+        update_metas = []
+        for drawer_id, document, metadata in zip(ids, documents, metadatas):
+            if metadata.get("memory_key") != memory_key:
+                continue
+            if metadata.get("valid_to"):
+                continue
+            updated = dict(metadata)
+            updated["valid_to"] = valid_to
+            update_ids.append(drawer_id)
+            update_docs.append(document)
+            update_metas.append(updated)
+
+        if update_ids:
+            self._collection_for(create=True).upsert(
+                ids=update_ids,
+                documents=update_docs,
+                metadatas=update_metas,
+            )
+        return len(update_ids)
+
+    def invalidate_drawers(self, *, drawer_ids: list[str], valid_to: str) -> int:
+        if not drawer_ids:
+            return 0
+        result = self._collection_for().get(
+            ids=drawer_ids, include=["documents", "metadatas"]
+        )
+        ids = result.get("ids", [])
+        documents = result.get("documents", [])
+        metadatas = result.get("metadatas", [])
+
+        update_ids = []
+        update_docs = []
+        update_metas = []
+        for drawer_id, document, metadata in zip(ids, documents, metadatas):
+            if metadata.get("valid_to"):
+                continue
+            updated = dict(metadata)
+            updated["valid_to"] = valid_to
+            update_ids.append(drawer_id)
+            update_docs.append(document)
+            update_metas.append(updated)
+
+        if update_ids:
+            self._collection_for(create=True).upsert(
+                ids=update_ids,
+                documents=update_docs,
+                metadatas=update_metas,
+            )
+        return len(update_ids)
+
     def status(self):
         try:
             collection = self._collection_for()
@@ -338,6 +479,90 @@ class MempalaceBackend:
         except Exception:
             total = 0
         return {"total_drawers": total, "palace_path": self.palace_path}
+
+    def memory_stats(self) -> dict[str, Any]:
+        try:
+            metadatas = self._get_all(include=["metadatas"]).get("metadatas", [])
+        except Exception:
+            metadatas = []
+
+        payload = {
+            "drawer_count": 0,
+            "current_drawer_count": 0,
+            "historical_drawer_count": 0,
+            "memory_tier_counts": {},
+            "current_memory_tier_counts": {},
+            "historical_memory_tier_counts": {},
+            "working_summary_count": 0,
+            "current_working_summary_count": 0,
+            "historical_working_summary_count": 0,
+            "active_memory_key_counts": {},
+            "current_memory_key_counts": {},
+            "historical_memory_key_counts": {},
+            "recent_active_memory_keys": [],
+        }
+        recent_candidates = []
+        for item in metadatas:
+            memory_tier = item.get("memory_tier") or "unknown"
+            payload["drawer_count"] += 1
+            payload["memory_tier_counts"][memory_tier] = (
+                payload["memory_tier_counts"].get(memory_tier, 0) + 1
+            )
+            if item.get("valid_to"):
+                payload["historical_drawer_count"] += 1
+                payload["historical_memory_tier_counts"][memory_tier] = (
+                    payload["historical_memory_tier_counts"].get(memory_tier, 0) + 1
+                )
+                if item.get("working_summary") is True:
+                    payload["historical_working_summary_count"] += 1
+                memory_key = item.get("memory_key")
+                if memory_key and memory_key != "working_session_summary":
+                    payload["historical_memory_key_counts"][memory_key] = (
+                        payload["historical_memory_key_counts"].get(memory_key, 0) + 1
+                    )
+            else:
+                payload["current_drawer_count"] += 1
+                payload["current_memory_tier_counts"][memory_tier] = (
+                    payload["current_memory_tier_counts"].get(memory_tier, 0) + 1
+                )
+                if item.get("working_summary") is True:
+                    payload["current_working_summary_count"] += 1
+                memory_key = item.get("memory_key")
+                if memory_key and memory_key != "working_session_summary":
+                    payload["active_memory_key_counts"][memory_key] = (
+                        payload["active_memory_key_counts"].get(memory_key, 0) + 1
+                    )
+                    payload["current_memory_key_counts"][memory_key] = (
+                        payload["current_memory_key_counts"].get(memory_key, 0) + 1
+                    )
+                    recent_candidates.append(
+                        {
+                            "memory_key": memory_key,
+                            "memory_tier": memory_tier,
+                            "memory_value": item.get("memory_value"),
+                            "message_id": item.get("message_id"),
+                            "session_id": item.get("session_id"),
+                            "valid_from": item.get("valid_from"),
+                            "filed_at": item.get("filed_at"),
+                        }
+                    )
+            if item.get("working_summary") is True:
+                payload["working_summary_count"] += 1
+        seen_keys = set()
+        for item in sorted(
+            recent_candidates,
+            key=lambda row: (
+                row.get("valid_from") or row.get("filed_at") or "",
+                row.get("message_id") or "",
+            ),
+            reverse=True,
+        ):
+            key = item.get("memory_key")
+            if not key or key in seen_keys:
+                continue
+            seen_keys.add(key)
+            payload["recent_active_memory_keys"].append(item)
+        return payload
 
     def list_wings(self):
         try:
@@ -369,12 +594,31 @@ class MempalaceBackend:
         except Exception:
             return {}
         taxonomy: dict[str, dict[str, int]] = {}
+        taxonomy_by_memory_tier: dict[str, dict[str, dict[str, int]]] = {}
+        taxonomy_by_memory_key: dict[str, dict[str, dict[str, int]]] = {}
         for item in metadatas:
             wing = item.get("wing", "unknown")
             room = item.get("room", "unknown")
             taxonomy.setdefault(wing, {})
             taxonomy[wing][room] = taxonomy[wing].get(room, 0) + 1
-        return taxonomy
+            memory_tier = item.get("memory_tier") or "unknown"
+            taxonomy_by_memory_tier.setdefault(memory_tier, {})
+            taxonomy_by_memory_tier[memory_tier].setdefault(wing, {})
+            taxonomy_by_memory_tier[memory_tier][wing][room] = (
+                taxonomy_by_memory_tier[memory_tier][wing].get(room, 0) + 1
+            )
+            memory_key = item.get("memory_key")
+            if memory_key:
+                taxonomy_by_memory_key.setdefault(memory_key, {})
+                taxonomy_by_memory_key[memory_key].setdefault(wing, {})
+                taxonomy_by_memory_key[memory_key][wing][room] = (
+                    taxonomy_by_memory_key[memory_key][wing].get(room, 0) + 1
+                )
+        return {
+            "taxonomy": taxonomy,
+            "taxonomy_by_memory_tier": taxonomy_by_memory_tier,
+            "taxonomy_by_memory_key": taxonomy_by_memory_key,
+        }
 
     def list_drawers(
         self,
@@ -382,6 +626,9 @@ class MempalaceBackend:
         wing: str | None = None,
         room: str | None = None,
         session_id: str | None = None,
+        memory_tier: str | None = None,
+        current_only: bool = False,
+        historical_only: bool = False,
         role: str | None = None,
         source_file: str | None = None,
         limit: int = 20,
@@ -391,6 +638,9 @@ class MempalaceBackend:
             wing=wing,
             room=room,
             session_id=session_id,
+            memory_tier=memory_tier,
+            current_only=current_only,
+            historical_only=historical_only,
             role=role,
             source_file=source_file,
             limit=limit,
@@ -442,11 +692,30 @@ class MempalaceBackend:
                     "wing": item.get("wing", "unknown"),
                     "room": item.get("room", "unknown"),
                     "message_count": 0,
+                    "current_message_count": 0,
+                    "historical_message_count": 0,
+                    "memory_tier_counts": {},
+                    "current_memory_tier_counts": {},
+                    "historical_memory_tier_counts": {},
                     "last_filed_at": item.get("filed_at"),
                     "source_file": item.get("source_file", ""),
                 },
             )
             entry["message_count"] += 1
+            memory_tier = item.get("memory_tier") or "unknown"
+            entry["memory_tier_counts"][memory_tier] = (
+                entry["memory_tier_counts"].get(memory_tier, 0) + 1
+            )
+            if item.get("valid_to"):
+                entry["historical_message_count"] += 1
+                entry["historical_memory_tier_counts"][memory_tier] = (
+                    entry["historical_memory_tier_counts"].get(memory_tier, 0) + 1
+                )
+            else:
+                entry["current_message_count"] += 1
+                entry["current_memory_tier_counts"][memory_tier] = (
+                    entry["current_memory_tier_counts"].get(memory_tier, 0) + 1
+                )
             filed_at = item.get("filed_at")
             if filed_at and (
                 entry["last_filed_at"] is None or filed_at > entry["last_filed_at"]
@@ -464,6 +733,9 @@ class MempalaceBackend:
         self,
         *,
         session_id: str,
+        memory_tier: str | None = None,
+        current_only: bool = False,
+        historical_only: bool = False,
         role: str | None = None,
         limit: int = 20,
         offset: int = 0,
@@ -471,7 +743,9 @@ class MempalaceBackend:
         try:
             result = self._get_all(
                 include=["documents", "metadatas"],
-                where=self._make_where(session_id=session_id, role=role),
+                where=self._make_where(
+                    session_id=session_id, memory_tier=memory_tier, role=role
+                ),
             )
         except Exception:
             return []
@@ -484,6 +758,10 @@ class MempalaceBackend:
                 result.get("metadatas", []),
             )
         ]
+        if current_only:
+            rows = [row for row in rows if not row.get("valid_to")]
+        elif historical_only:
+            rows = [row for row in rows if row.get("valid_to")]
         rows.sort(key=_message_sort_key)
         return rows[offset : offset + limit]
 
@@ -502,8 +780,16 @@ class MempalaceBackend:
 class BridgeCore:
     def __init__(self, config: BridgeConfig | None = None, backend: Any | None = None):
         self.config = config or BridgeConfig()
-        self.state_store = StateStore(self.config.state_path)
+        self.state_store = SessionStateStore(self.config.state_path)
         self.backend = backend or MempalaceBackend(self.config)
+        self._runtime = {
+            "last_search_at": None,
+            "last_flush_at": None,
+            "last_compaction_at": None,
+            "last_compaction_session_id": None,
+            "last_compaction_compacted_count": 0,
+            "last_compaction_summary_drawer_id": None,
+        }
 
     def _load_state(self) -> dict[str, Any]:
         return self.state_store.load()
@@ -589,10 +875,17 @@ class BridgeCore:
             "preview": item.get("preview") or _preview_text(item.get("text", "")),
             "wing": item.get("wing"),
             "room": item.get("room"),
+            "directory": item.get("directory"),
             "source_file": item.get("source_file"),
             "session_id": item.get("session_id"),
             "message_id": item.get("message_id"),
             "role": item.get("role"),
+            "memory_tier": item.get("memory_tier"),
+            "memory_key": item.get("memory_key"),
+            "memory_value": item.get("memory_value"),
+            "valid_from": item.get("valid_from"),
+            "valid_to": item.get("valid_to"),
+            "working_summary": item.get("working_summary") is True,
             "filed_at": item.get("filed_at"),
             "similarity": item.get("similarity", 0),
             "distance": item.get("distance"),
@@ -600,29 +893,58 @@ class BridgeCore:
 
     def _format_context_hit(self, item: dict[str, Any]) -> dict[str, Any]:
         return {
+            "drawer_id": item.get("drawer_id"),
             "text": item.get("text", ""),
             "preview": item.get("preview") or _preview_text(item.get("text", ""), 160),
             "wing": item.get("wing"),
             "room": item.get("room"),
+            "directory": item.get("directory"),
             "source_file": item.get("source_file"),
             "session_id": item.get("session_id"),
             "message_id": item.get("message_id"),
             "role": item.get("role"),
+            "memory_tier": item.get("memory_tier"),
+            "memory_key": item.get("memory_key"),
+            "memory_value": item.get("memory_value"),
+            "valid_from": item.get("valid_from"),
+            "valid_to": item.get("valid_to"),
+            "working_summary": item.get("working_summary") is True,
+            "filed_at": item.get("filed_at"),
+            "search_tier": item.get("search_tier"),
             "similarity": item.get("similarity", 0),
         }
 
-    def _build_system_block(self, wing: str, results: list[dict[str, Any]]) -> str:
-        if not results:
-            return ""
-        lines = [f"MemPalace context for wing '{wing}':"]
-        used = len(lines[0])
-        for index, item in enumerate(results, start=1):
-            header = (
-                f"{index}. [{float(item.get('similarity', 0)):.2f}] "
-                f"room={item.get('room') or 'unknown'} "
-                f"role={item.get('role') or 'unknown'} "
-                f"src={item.get('source_file') or '?'}"
-            )
+    def _append_block_lines(
+        self,
+        lines: list[str],
+        used: int,
+        title: str,
+        items: list[dict[str, Any]],
+        mode: str,
+    ) -> int:
+        if not items:
+            return used
+        if lines:
+            lines.append("")
+            used += 1
+        lines.append(title)
+        used += len(title)
+        for index, item in enumerate(items, start=1):
+            drawer_id = item.get("drawer_id") or "?"
+            if mode == "core":
+                header = (
+                    f"{index}. [{item.get('memory_tier') or 'memory'}] "
+                    f"drawer={drawer_id} src={item.get('source_file') or '?'}"
+                )
+            else:
+                tier = item.get("search_tier") or "memory"
+                header = (
+                    f"{index}. [{float(item.get('similarity', 0)):.2f}][{tier}] "
+                    f"drawer={drawer_id} "
+                    f"room={item.get('room') or 'unknown'} "
+                    f"role={item.get('role') or 'unknown'} "
+                    f"src={item.get('source_file') or '?'}"
+                )
             if used + len(header) + 1 > self.config.max_block_chars:
                 break
             lines.append(header)
@@ -637,7 +959,195 @@ class BridgeCore:
             line = f"   {body}"
             lines.append(line)
             used += len(line) + 1
+        return used
+
+    def _build_system_block(
+        self,
+        wing: str,
+        results: list[dict[str, Any]],
+        core_memory: list[dict[str, Any]] | None = None,
+        core_memory_truncated_count: int = 0,
+        context_truncated_count: int = 0,
+    ) -> str:
+        if not results and not core_memory:
+            return ""
+        lines: list[str] = []
+        used = 0
+        used = self._append_block_lines(
+            lines, used, "Core memory:", core_memory or [], "core"
+        )
+        if core_memory_truncated_count > 0:
+            notice = f"   ... {core_memory_truncated_count} more core memories omitted"
+            if used + len(notice) + 1 <= self.config.max_block_chars:
+                lines.append(notice)
+                used += len(notice) + 1
+        if context_truncated_count > 0:
+            notice = f"   ... {context_truncated_count} more context memories omitted"
+            if used + len(notice) + 1 <= self.config.max_block_chars:
+                if lines:
+                    lines.append("")
+                    used += 1
+                lines.append(notice)
+                used += len(notice) + 1
+        used = self._append_block_lines(
+            lines,
+            used,
+            f"MemPalace context for wing '{wing}':",
+            results,
+            "context",
+        )
         return "\n".join(lines)
+
+    def _core_memory_results(
+        self, directory: str, wing: str
+    ) -> tuple[list[dict[str, Any]], int, int]:
+        tiers = [
+            ({"directory": directory, "memory_tier": "user_preference"}, 0),
+            ({"wing": wing, "memory_tier": "user_preference"}, 1),
+            ({"directory": directory, "memory_tier": "project_memory"}, 2),
+            ({"wing": wing, "memory_tier": "project_memory"}, 3),
+        ]
+        candidates = []
+        for filters, scope_priority in tiers:
+            rows = self.backend.query_drawers(query=None, limit=3, **filters)
+            for row in rows:
+                if not row.get("text"):
+                    continue
+                if row.get("valid_to"):
+                    continue
+                candidates.append({**row, "_scope_priority": scope_priority})
+
+        deduped = []
+        seen_keys = set()
+        for item in sorted(candidates, key=_core_memory_sort_key):
+            dedupe_key = item.get("memory_key") or item.get("drawer_id")
+            if not dedupe_key or dedupe_key in seen_keys:
+                continue
+            seen_keys.add(dedupe_key)
+            deduped.append(item)
+        total_count = len(deduped)
+        limit = max(0, int(self.config.core_memory_limit or 0))
+        if limit:
+            deduped = deduped[:limit]
+        else:
+            deduped = []
+        formatted = [self._format_context_hit(item) for item in deduped]
+        return formatted, total_count, max(0, total_count - len(formatted))
+
+    def _tiered_context_results(
+        self, query: str, directory: str, wing: str, session_id: str | None = None
+    ) -> tuple[list[dict[str, Any]], int, int]:
+        limit = max(1, int(self.config.search_limit or 0))
+        tier_fetch_limit = max(limit * 4, 10)
+        tiers = []
+        if session_id:
+            tiers.append(("session", {"session_id": session_id}))
+        tiers.append(("directory", {"directory": directory}))
+        tiers.append(("wing", {"wing": wing}))
+        tiers.append(("global", {}))
+
+        seen = set()
+        results = []
+        for tier_name, filters in tiers:
+            rows = self.backend.query_drawers(
+                query=query,
+                limit=tier_fetch_limit,
+                current_only=True,
+                **filters,
+            )
+            for row in rows:
+                drawer_id = row.get("drawer_id")
+                if not drawer_id or drawer_id in seen:
+                    continue
+                if not row.get("text") or float(row.get("similarity", 0)) <= 0:
+                    continue
+                seen.add(drawer_id)
+                results.append({**row, "search_tier": tier_name})
+        total_count = len(results)
+        if limit:
+            results = results[:limit]
+        else:
+            results = []
+        return results, total_count, max(0, total_count - len(results))
+
+    def _build_working_session_summary_content(self, rows: list[dict[str, Any]]) -> str:
+        lines = ["Working session summary:"]
+        for row in sorted(rows, key=_summary_sort_key):
+            preview = _preview_text(row.get("text", ""), max_chars=120)
+            if preview:
+                lines.append(f"- {preview}")
+        return "\n".join(lines)
+
+    def _compact_working_session(
+        self, session_id: str, session: dict[str, Any]
+    ) -> None:
+        threshold = max(0, int(self.config.working_session_compact_threshold or 0))
+        retain_count = max(0, int(self.config.working_session_retain_count or 0))
+        if threshold <= 0:
+            return
+
+        rows = self.backend.get_session_messages(
+            session_id=session_id,
+            memory_tier="working_session",
+            current_only=True,
+            limit=1000,
+            offset=0,
+        )
+        summary_rows = [row for row in rows if row.get("working_summary")]
+        detail_rows = [row for row in rows if not row.get("working_summary")]
+        if len(detail_rows) <= threshold:
+            return
+
+        compressible = detail_rows[:-retain_count] if retain_count else detail_rows
+        if not compressible:
+            return
+
+        rows_to_compact = summary_rows + compressible
+        valid_to = datetime.now(timezone.utc).isoformat()
+        self.backend.invalidate_drawers(
+            drawer_ids=[
+                row["drawer_id"] for row in rows_to_compact if row.get("drawer_id")
+            ],
+            valid_to=valid_to,
+        )
+
+        compressed_orders = [
+            _safe_order(row.get("metadata", {}).get("session_order")) or 0
+            for row in compressible
+        ]
+        start_order = min(compressed_orders) if compressed_orders else 0
+        end_order = max(compressed_orders) if compressed_orders else 0
+        summary_id = f"summary_{session_id}_{start_order}_{end_order}"
+
+        summary = self.backend.save_entry(
+            wing=session["wing"],
+            room=self.config.default_room,
+            content=self._build_working_session_summary_content(rows_to_compact),
+            source_file=f"session:{session_id}",
+            metadata={
+                "type": "opencode_message",
+                "session_id": session_id,
+                "message_id": summary_id,
+                "role": "assistant",
+                "reason": "working_session_compaction",
+                "directory": session["directory"],
+                "memory_tier": "working_session",
+                "memory_key": "working_session_summary",
+                "memory_value": session_id,
+                "dedupe_hash": None,
+                "working_summary": True,
+                "valid_from": valid_to,
+                "valid_to": None,
+                "session_order": end_order,
+                "summary_start_order": start_order,
+                "summary_end_order": end_order,
+                "summary_count": len(rows_to_compact),
+            },
+        )
+        self._runtime["last_compaction_at"] = valid_to
+        self._runtime["last_compaction_session_id"] = session_id
+        self._runtime["last_compaction_compacted_count"] = len(rows_to_compact)
+        self._runtime["last_compaction_summary_drawer_id"] = summary["drawer_id"]
 
     def health(self) -> dict[str, Any]:
         status = self.backend.status()
@@ -661,22 +1171,40 @@ class BridgeCore:
     def search_context(
         self, query: str, directory: str, session_id: str | None = None
     ) -> dict[str, Any]:
+        normalized_directory = self._normalize_directory(directory)
         wing = self.resolve_wing(directory)
-        results = [
-            self._format_context_hit(item)
-            for item in self.backend.query_drawers(
-                query=query, wing=wing, room=None, limit=self.config.search_limit
+        context_items, context_total_count, context_truncated_count = (
+            self._tiered_context_results(
+                query=query,
+                directory=normalized_directory,
+                wing=wing,
+                session_id=session_id,
             )
-            if item.get("text") and float(item.get("similarity", 0)) > 0
-        ]
+        )
+        results = [self._format_context_hit(item) for item in context_items]
+        core_memory, core_memory_total_count, core_memory_truncated_count = (
+            self._core_memory_results(normalized_directory, wing)
+        )
+        self._runtime["last_search_at"] = datetime.now(timezone.utc).isoformat()
         return {
             "session_id": session_id,
             "query": query,
-            "directory": self._normalize_directory(directory),
+            "directory": normalized_directory,
             "wing": wing,
+            "core_memory": core_memory,
+            "core_memory_total_count": core_memory_total_count,
+            "core_memory_truncated_count": core_memory_truncated_count,
+            "context_total_count": context_total_count,
+            "context_truncated_count": context_truncated_count,
             "results_count": len(results),
             "results": results,
-            "system_block": self._build_system_block(wing, results),
+            "system_block": self._build_system_block(
+                wing,
+                results,
+                core_memory,
+                core_memory_truncated_count=core_memory_truncated_count,
+                context_truncated_count=context_truncated_count,
+            ),
         }
 
     def flush_session(
@@ -697,6 +1225,17 @@ class BridgeCore:
         )
         saved = []
         next_order = int(session.get("last_saved_order") or 0)
+        existing_working_hashes = {
+            item.get("dedupe_hash")
+            for item in self.backend.get_session_messages(
+                session_id=session_id,
+                memory_tier="working_session",
+                current_only=True,
+                limit=1000,
+                offset=0,
+            )
+            if item.get("dedupe_hash")
+        }
 
         for message in new_messages:
             info = message.get("info", {})
@@ -708,6 +1247,41 @@ class BridgeCore:
                 continue
             next_order += 1
             content = f"{role.title()}:\n{text}"
+            memory_tier = classify_memory_tier(role, text)
+            memory_key = derive_memory_key(memory_tier, text)
+            memory_value = derive_memory_value(memory_key, text)
+            dedupe_hash = None
+            filed_at = datetime.now(timezone.utc).isoformat()
+            if memory_key and memory_tier in {"user_preference", "project_memory"}:
+                current_memories = self.backend.query_drawers(
+                    query=None,
+                    wing=session["wing"],
+                    directory=session["directory"],
+                    memory_tier=memory_tier,
+                    current_only=True,
+                    limit=20,
+                )
+                current_match = next(
+                    (
+                        item
+                        for item in current_memories
+                        if item.get("memory_key") == memory_key
+                    ),
+                    None,
+                )
+                if current_match and current_match.get("memory_value") == memory_value:
+                    continue
+                self.backend.invalidate_memory_conflicts(
+                    wing=session["wing"],
+                    directory=session["directory"],
+                    memory_tier=memory_tier,
+                    memory_key=memory_key,
+                    valid_to=filed_at,
+                )
+            if memory_tier == "working_session":
+                dedupe_hash = _working_session_dedupe_hash(role, text)
+                if dedupe_hash in existing_working_hashes:
+                    continue
             saved.append(
                 self.backend.save_entry(
                     wing=session["wing"],
@@ -721,16 +1295,26 @@ class BridgeCore:
                         "role": role,
                         "reason": reason,
                         "directory": session["directory"],
+                        "memory_tier": memory_tier,
+                        "memory_key": memory_key,
+                        "memory_value": memory_value,
+                        "dedupe_hash": dedupe_hash,
+                        "valid_from": filed_at,
+                        "valid_to": None,
                         "session_order": next_order,
                     },
                 )
             )
+            if dedupe_hash:
+                existing_working_hashes.add(dedupe_hash)
 
         if messages:
             session["last_saved_message_id"] = messages[-1].get("info", {}).get("id")
         session["last_saved_order"] = next_order
         session["last_saved_at"] = datetime.now(timezone.utc).isoformat()
+        self._runtime["last_flush_at"] = session["last_saved_at"]
         self._save_state(state)
+        self._compact_working_session(session_id, session)
         return {
             "session_id": session_id,
             "directory": session["directory"],
@@ -753,6 +1337,13 @@ class BridgeCore:
         )
         return payload
 
+    def debug_status(self) -> dict[str, Any]:
+        payload = self.mcp_status()
+        payload.update(self.state_store.summary())
+        payload.update(self.backend.memory_stats())
+        payload.update(self._runtime)
+        return payload
+
     def mcp_list_wings(self) -> dict[str, Any]:
         return {"wings": self.backend.list_wings()}
 
@@ -767,7 +1358,7 @@ class BridgeCore:
         }
 
     def mcp_get_taxonomy(self) -> dict[str, Any]:
-        return {"taxonomy": self.backend.get_taxonomy()}
+        return self.backend.get_taxonomy()
 
     def mcp_get_drawer(self, drawer_id: str) -> dict[str, Any]:
         result = self.backend.get_drawer(drawer_id)
@@ -778,10 +1369,14 @@ class BridgeCore:
         query: str,
         limit: int = 5,
         wing: str | None = None,
+        memory_tier: str | None = None,
+        current_only: bool = False,
+        historical_only: bool = False,
         room: str | None = None,
     ) -> dict[str, Any]:
         try:
             safe_wing = _sanitize_optional_name(wing, "wing")
+            safe_memory_tier = _sanitize_optional_memory_tier(memory_tier)
             safe_room = _sanitize_optional_name(room, "room")
         except ValueError as exc:
             return {"error": str(exc)}
@@ -790,6 +1385,9 @@ class BridgeCore:
             for item in self.backend.query_drawers(
                 query=query,
                 wing=safe_wing,
+                memory_tier=safe_memory_tier,
+                current_only=current_only,
+                historical_only=historical_only,
                 room=safe_room,
                 limit=self._normalize_limit(limit, default=5),
             )
@@ -798,6 +1396,9 @@ class BridgeCore:
         return {
             "query": query,
             "wing": safe_wing,
+            "memory_tier": safe_memory_tier,
+            "current_only": current_only,
+            "historical_only": historical_only,
             "room": safe_room,
             "results": results,
         }
@@ -807,6 +1408,9 @@ class BridgeCore:
         wing: str | None = None,
         room: str | None = None,
         session_id: str | None = None,
+        memory_tier: str | None = None,
+        current_only: bool = False,
+        historical_only: bool = False,
         role: str | None = None,
         source_file: str | None = None,
         limit: int = 20,
@@ -815,6 +1419,7 @@ class BridgeCore:
         try:
             safe_wing = _sanitize_optional_name(wing, "wing")
             safe_room = _sanitize_optional_name(room, "room")
+            safe_memory_tier = _sanitize_optional_memory_tier(memory_tier)
             safe_role = _sanitize_optional_role(role)
         except ValueError as exc:
             return {"error": str(exc)}
@@ -825,6 +1430,9 @@ class BridgeCore:
                 wing=safe_wing,
                 room=safe_room,
                 session_id=session_id,
+                memory_tier=safe_memory_tier,
+                current_only=current_only,
+                historical_only=historical_only,
                 role=safe_role,
                 source_file=source_file,
                 limit=self._normalize_limit(limit),
@@ -835,6 +1443,9 @@ class BridgeCore:
             "wing": safe_wing,
             "room": safe_room,
             "session_id": session_id,
+            "memory_tier": safe_memory_tier,
+            "current_only": current_only,
+            "historical_only": historical_only,
             "role": safe_role,
             "source_file": source_file,
             "count": len(drawers),
@@ -874,11 +1485,15 @@ class BridgeCore:
     def mcp_get_session_messages(
         self,
         session_id: str,
+        memory_tier: str | None = None,
+        current_only: bool = False,
+        historical_only: bool = False,
         role: str | None = None,
         limit: int = 20,
         offset: int = 0,
     ) -> dict[str, Any]:
         try:
+            safe_memory_tier = _sanitize_optional_memory_tier(memory_tier)
             safe_role = _sanitize_optional_role(role)
         except ValueError as exc:
             return {"error": str(exc)}
@@ -887,6 +1502,9 @@ class BridgeCore:
             self._format_public_hit(item)
             for item in self.backend.get_session_messages(
                 session_id=session_id,
+                memory_tier=safe_memory_tier,
+                current_only=current_only,
+                historical_only=historical_only,
                 role=safe_role,
                 limit=self._normalize_limit(limit),
                 offset=self._normalize_offset(offset),
@@ -894,6 +1512,9 @@ class BridgeCore:
         ]
         return {
             "session_id": session_id,
+            "memory_tier": safe_memory_tier,
+            "current_only": current_only,
+            "historical_only": historical_only,
             "role": safe_role,
             "count": len(messages),
             "offset": self._normalize_offset(offset),
