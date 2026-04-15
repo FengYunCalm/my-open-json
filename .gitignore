@@ -6,4 +6,5 @@ logs/
 *.sqlite
 *.pyc
 mcp/mempalace_bridge_state.json
+mcp/mempalace_bridge_state.json.bak
 bun.lock
