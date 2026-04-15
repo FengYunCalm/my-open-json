@@ -127,6 +127,10 @@ def _safe_order(value: Any) -> int | None:
         return None
 
 
+def _normalize_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in metadata.items() if value is not None}
+
+
 def _message_sort_key(item: dict[str, Any]) -> tuple[Any, ...]:
     metadata = item.get("metadata", {})
     session_order = _safe_order(metadata.get("session_order"))
@@ -387,15 +391,17 @@ class MempalaceBackend:
             ).encode("utf-8")
         ).hexdigest()[:24]
         drawer_id = f"drawer_{wing}_{room}_{digest}"
-        payload = {
-            "wing": wing,
-            "room": room,
-            "source_file": source_file,
-            "chunk_index": 0,
-            "added_by": "opencode-bridge",
-            "filed_at": datetime.now(timezone.utc).isoformat(),
-            **metadata,
-        }
+        payload = _normalize_metadata(
+            {
+                "wing": wing,
+                "room": room,
+                "source_file": source_file,
+                "chunk_index": 0,
+                "added_by": "opencode-bridge",
+                "filed_at": datetime.now(timezone.utc).isoformat(),
+                **metadata,
+            }
+        )
         collection.upsert(ids=[drawer_id], documents=[content], metadatas=[payload])
         return {"drawer_id": drawer_id, "wing": wing, "room": room, "metadata": payload}
 

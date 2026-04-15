@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from mempalace_bridge_core import BridgeConfig, BridgeCore
+from mempalace_bridge_core import BridgeConfig, BridgeCore, MempalaceBackend
 
 
 class FakeBackend:
@@ -508,6 +508,44 @@ def make_core(**config_overrides) -> tuple[BridgeCore, FakeBackend]:
         backend=backend,
     )
     return core, backend
+
+
+def test_backend_save_entry_omits_none_metadata_values():
+    class CaptureCollection:
+        def __init__(self):
+            self.metadatas = []
+
+        def upsert(self, *, ids, documents, metadatas):
+            self.metadatas = metadatas
+
+    collection = CaptureCollection()
+    backend = object.__new__(MempalaceBackend)
+    backend._collection = collection
+
+    result = MempalaceBackend.save_entry(
+        backend,
+        wing="opencode",
+        room="opencode-session",
+        content="User:\nPlease remember this",
+        source_file="session:ses_demo",
+        metadata={
+            "session_id": "ses_demo",
+            "message_id": "msg_none",
+            "memory_key": None,
+            "memory_value": None,
+            "dedupe_hash": None,
+            "valid_to": None,
+        },
+    )
+
+    saved = collection.metadatas[0]
+    assert result["metadata"] == saved
+    assert saved["session_id"] == "ses_demo"
+    assert saved["message_id"] == "msg_none"
+    assert "memory_key" not in saved
+    assert "memory_value" not in saved
+    assert "dedupe_hash" not in saved
+    assert "valid_to" not in saved
 
 
 def test_mcp_search_returns_navigation_metadata_and_preview():
