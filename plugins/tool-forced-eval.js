@@ -55,8 +55,8 @@ const TOOL_DESCRIPTION_HINTS = [
     note: "Prefer this when the task needs structured knowledge graph memory, including saved entities, relations, or previously recorded observations.",
   },
   {
-    match: (toolID) => toolID.startsWith("mempalace_"),
-    note: "Prefer this when the task needs knowledge already stored in the local MemPalace, such as prior decisions, project facts, or historical context.",
+    match: (toolID) => toolID.startsWith("evomemory_"),
+    note: "Prefer this when the task needs persistent evomemory knowledge such as prior decisions, project facts, historical context, governance assets, feedback, or benchmark snapshots.",
   },
 ];
 

@@ -1,9 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { MempalaceOpencodePlugin } from '../mempalace-opencode.js'
+import { EvomemoryOpencodePlugin } from '../evomemory-opencode.js'
 
-test('prewarms mempalace bridge during plugin initialization', async () => {
+test('prewarms evomemory bridge during plugin initialization', async () => {
   const originalFetch = globalThis.fetch
   const calls = []
 
@@ -16,7 +16,7 @@ test('prewarms mempalace bridge during plugin initialization', async () => {
   }
 
   try {
-    await MempalaceOpencodePlugin({
+    await EvomemoryOpencodePlugin({
       client: {
         app: { log: async () => {} },
         session: { messages: async () => ({ data: [] }) },
@@ -67,7 +67,7 @@ test('prefers bridge-provided system_block over local formatting', async () => {
   }
 
   try {
-    const plugin = await MempalaceOpencodePlugin({
+    const plugin = await EvomemoryOpencodePlugin({
       client: {
         app: { log: async () => {} },
         session: { messages: async () => ({ data: [] }) },

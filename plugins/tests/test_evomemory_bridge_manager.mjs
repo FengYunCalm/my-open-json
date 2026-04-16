@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import {
   bridgeStatus,
   ensureBridge,
-} from '../mempalace-bridge-manager.mjs'
+} from '../evomemory-bridge-manager.mjs'
 
 test('bridgeStatus caches healthy checks within ttl', async () => {
   let now = 1000
@@ -56,7 +56,7 @@ test('ensureBridge falls back to direct launch after managed startup misses heal
   const config = {
     bridgeBaseUrl: 'http://127.0.0.1:8765',
     ensureBridgeCommand: ['bash', '-lc', 'systemctl --user start mempalace-bridge.service'],
-    directBridgeCommand: ['python', 'mempalace_bridge_server.py', '--host', '127.0.0.1', '--port', '8765'],
+    directBridgeCommand: ['python', 'evomemory/interfaces/mcp/server.py', '--host', '127.0.0.1', '--port', '8765'],
     healthcheckCacheTtlMs: 0,
   }
 
@@ -71,6 +71,6 @@ test('ensureBridge falls back to direct launch after managed startup misses heal
   assert.equal(ok, true)
   assert.deepEqual(spawnCalls, [
     ['bash', '-lc', 'systemctl --user start mempalace-bridge.service'],
-    ['python', 'mempalace_bridge_server.py', '--host', '127.0.0.1', '--port', '8765'],
+    ['python', 'evomemory/interfaces/mcp/server.py', '--host', '127.0.0.1', '--port', '8765'],
   ])
 })

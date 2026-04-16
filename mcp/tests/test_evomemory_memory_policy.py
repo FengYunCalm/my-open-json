@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from mempalace_memory_policy import (
+from evomemory.domain.memory_policy import (
     classify_memory_tier,
     derive_memory_key,
     derive_memory_value,

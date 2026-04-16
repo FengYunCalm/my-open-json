@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from mempalace_session_state import SessionStateStore
+from evomemory.infrastructure.state.session_state import SessionStateStore
 
 
 def test_session_state_store_persists_sessions_across_instances():

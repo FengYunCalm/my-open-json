@@ -8,16 +8,47 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import chromadb
+try:
+    import chromadb
+except (
+    ModuleNotFoundError
+):  # pragma: no cover - exercised in lightweight import contexts
+    chromadb = None
 
-from mempalace.config import MempalaceConfig, sanitize_content, sanitize_name
-from mempalace.knowledge_graph import KnowledgeGraph
-from mempalace_memory_policy import (
+try:
+    from mempalace.config import MempalaceConfig, sanitize_content, sanitize_name
+    from mempalace.knowledge_graph import KnowledgeGraph
+except (
+    ModuleNotFoundError
+):  # pragma: no cover - exercised in lightweight import contexts
+    MempalaceConfig = None
+
+    def sanitize_content(value: str, _field_name: str | None = None) -> str:
+        return value
+
+    def sanitize_name(value: str, _field_name: str | None = None) -> str:
+        return value
+
+    class KnowledgeGraph:  # type: ignore[no-redef]
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError(
+                "mempalace is required to initialize the knowledge graph backend. Install mempalace before using the live backend."
+            )
+
+
+from evomemory.domain.memory_policy import (
     classify_memory_tier,
     derive_memory_key,
     derive_memory_value,
 )
-from mempalace_session_state import SessionStateStore
+from evomemory.context.query_service import ContextQueryService
+from evomemory.context.repository import ContextRepository
+from evomemory.context.session_service import SessionLifecycleService
+from evomemory.belief import BeliefPlaneService, MemoryPromoter, MemoryReviser
+from evomemory.evaluation import EvaluationPlaneService
+from evomemory.governance import GovernancePlaneService
+from evomemory.runtime import RuntimeOrchestrator
+from evomemory.infrastructure.state.session_state import SessionStateStore
 
 
 SKIP_TEXTS = {
@@ -172,6 +203,10 @@ class BridgeConfig:
 
 class MempalaceBackend:
     def __init__(self, config: BridgeConfig):
+        if MempalaceConfig is None:
+            raise RuntimeError(
+                "mempalace is required to initialize the MemPalace backend. Install mempalace before using the live backend."
+            )
         self.bridge_config = config
         self.mempalace_config = MempalaceConfig()
         if config.palace_path:
@@ -187,6 +222,10 @@ class MempalaceBackend:
         )
 
     def _client_for(self) -> chromadb.PersistentClient:
+        if chromadb is None:
+            raise RuntimeError(
+                "chromadb is required to initialize the MemPalace backend. Install chromadb before using the live backend."
+            )
         if self._client is None:
             self._client = chromadb.PersistentClient(path=self.palace_path)
         return self._client
@@ -787,8 +826,9 @@ class BridgeCore:
     def __init__(self, config: BridgeConfig | None = None, backend: Any | None = None):
         self.config = config or BridgeConfig()
         self.state_store = SessionStateStore(self.config.state_path)
-        self.backend = backend or MempalaceBackend(self.config)
-        self._runtime = {
+        self.repository = ContextRepository(backend or MempalaceBackend(self.config))
+        self.backend = self.repository.backend
+        self.runtime = {
             "last_search_at": None,
             "last_flush_at": None,
             "last_compaction_at": None,
@@ -796,6 +836,27 @@ class BridgeCore:
             "last_compaction_compacted_count": 0,
             "last_compaction_summary_drawer_id": None,
         }
+        self._runtime = self.runtime
+        self.valid_roles = VALID_ROLES
+        self.classify_memory_tier = classify_memory_tier
+        self.derive_memory_key = derive_memory_key
+        self.derive_memory_value = derive_memory_value
+        self.working_session_dedupe_hash = _working_session_dedupe_hash
+        self.sanitize_optional_name = _sanitize_optional_name
+        self.sanitize_optional_role = _sanitize_optional_role
+        self.sanitize_optional_memory_tier = _sanitize_optional_memory_tier
+        self.session_service = SessionLifecycleService(self)
+        self.query_service = ContextQueryService(self)
+        self.belief_service = BeliefPlaneService(self.config.state_path)
+        self.governance_service = GovernancePlaneService(self.config.state_path)
+        self.evaluation_service = EvaluationPlaneService(self.config.state_path)
+        self.reviser = MemoryReviser(self.repository)
+        self.promoter = MemoryPromoter(
+            self.belief_service,
+            self.governance_service,
+            self.evaluation_service,
+        )
+        self.runtime_orchestrator = RuntimeOrchestrator(self, self.evaluation_service)
 
     def _load_state(self) -> dict[str, Any]:
         return self.state_store.load()
@@ -1015,7 +1076,7 @@ class BridgeCore:
         ]
         candidates = []
         for filters, scope_priority in tiers:
-            rows = self.backend.query_drawers(query=None, limit=3, **filters)
+            rows = self.repository.query_drawers(query=None, limit=3, **filters)
             for row in rows:
                 if not row.get("text"):
                     continue
@@ -1055,7 +1116,7 @@ class BridgeCore:
         seen = set()
         results = []
         for tier_name, filters in tiers:
-            rows = self.backend.query_drawers(
+            rows = self.repository.query_drawers(
                 query=query,
                 limit=tier_fetch_limit,
                 current_only=True,
@@ -1092,7 +1153,7 @@ class BridgeCore:
         if threshold <= 0:
             return
 
-        rows = self.backend.get_session_messages(
+        rows = self.repository.get_session_messages(
             session_id=session_id,
             memory_tier="working_session",
             current_only=True,
@@ -1110,7 +1171,7 @@ class BridgeCore:
 
         rows_to_compact = summary_rows + compressible
         valid_to = datetime.now(timezone.utc).isoformat()
-        self.backend.invalidate_drawers(
+        self.repository.invalidate_drawers(
             drawer_ids=[
                 row["drawer_id"] for row in rows_to_compact if row.get("drawer_id")
             ],
@@ -1125,7 +1186,7 @@ class BridgeCore:
         end_order = max(compressed_orders) if compressed_orders else 0
         summary_id = f"summary_{session_id}_{start_order}_{end_order}"
 
-        summary = self.backend.save_entry(
+        summary = self.repository.save_entry(
             wing=session["wing"],
             room=self.config.default_room,
             content=self._build_working_session_summary_content(rows_to_compact),
@@ -1150,68 +1211,23 @@ class BridgeCore:
                 "summary_count": len(rows_to_compact),
             },
         )
-        self._runtime["last_compaction_at"] = valid_to
-        self._runtime["last_compaction_session_id"] = session_id
-        self._runtime["last_compaction_compacted_count"] = len(rows_to_compact)
-        self._runtime["last_compaction_summary_drawer_id"] = summary["drawer_id"]
+        self.runtime["last_compaction_at"] = valid_to
+        self.runtime["last_compaction_session_id"] = session_id
+        self.runtime["last_compaction_compacted_count"] = len(rows_to_compact)
+        self.runtime["last_compaction_summary_drawer_id"] = summary["drawer_id"]
 
     def health(self) -> dict[str, Any]:
-        status = self.backend.status()
-        return {"ok": True, **status}
+        return self.query_service.health()
 
     def start_session(self, session_id: str, directory: str) -> dict[str, Any]:
-        state = self._load_state()
-        sessions = state.setdefault("sessions", {})
-        entry = sessions.setdefault(session_id, {})
-        entry["directory"] = self._normalize_directory(directory)
-        entry["wing"] = self.resolve_wing(directory)
-        entry.setdefault("last_saved_message_id", None)
-        entry.setdefault("last_saved_order", 0)
-        self._save_state(state)
-        return {
-            "session_id": session_id,
-            "wing": entry["wing"],
-            "directory": entry["directory"],
-        }
+        return self.session_service.start_session(session_id, directory)
 
     def search_context(
         self, query: str, directory: str, session_id: str | None = None
     ) -> dict[str, Any]:
-        normalized_directory = self._normalize_directory(directory)
-        wing = self.resolve_wing(directory)
-        context_items, context_total_count, context_truncated_count = (
-            self._tiered_context_results(
-                query=query,
-                directory=normalized_directory,
-                wing=wing,
-                session_id=session_id,
-            )
+        return self.query_service.search_context(
+            query, directory, session_id=session_id
         )
-        results = [self._format_context_hit(item) for item in context_items]
-        core_memory, core_memory_total_count, core_memory_truncated_count = (
-            self._core_memory_results(normalized_directory, wing)
-        )
-        self._runtime["last_search_at"] = datetime.now(timezone.utc).isoformat()
-        return {
-            "session_id": session_id,
-            "query": query,
-            "directory": normalized_directory,
-            "wing": wing,
-            "core_memory": core_memory,
-            "core_memory_total_count": core_memory_total_count,
-            "core_memory_truncated_count": core_memory_truncated_count,
-            "context_total_count": context_total_count,
-            "context_truncated_count": context_truncated_count,
-            "results_count": len(results),
-            "results": results,
-            "system_block": self._build_system_block(
-                wing,
-                results,
-                core_memory,
-                core_memory_truncated_count=core_memory_truncated_count,
-                context_truncated_count=context_truncated_count,
-            ),
-        }
 
     def flush_session(
         self,
@@ -1220,155 +1236,32 @@ class BridgeCore:
         messages: list[dict[str, Any]],
         reason: str,
     ) -> dict[str, Any]:
-        state = self._load_state()
-        sessions = state.setdefault("sessions", {})
-        session = sessions.setdefault(session_id, {})
-        session.setdefault("directory", self._normalize_directory(directory))
-        session.setdefault("wing", self.resolve_wing(directory))
-        session.setdefault("last_saved_order", 0)
-        new_messages = self._new_messages(
-            messages, session.get("last_saved_message_id")
+        return self.session_service.flush_session(
+            session_id, directory, messages, reason
         )
-        saved = []
-        next_order = int(session.get("last_saved_order") or 0)
-        existing_working_hashes = {
-            item.get("dedupe_hash")
-            for item in self.backend.get_session_messages(
-                session_id=session_id,
-                memory_tier="working_session",
-                current_only=True,
-                limit=1000,
-                offset=0,
-            )
-            if item.get("dedupe_hash")
-        }
-
-        for message in new_messages:
-            info = message.get("info", {})
-            role = info.get("role")
-            if role not in VALID_ROLES:
-                continue
-            text = self._collect_text(message.get("parts", []))
-            if not self._is_meaningful_text(text):
-                continue
-            next_order += 1
-            content = f"{role.title()}:\n{text}"
-            memory_tier = classify_memory_tier(role, text)
-            memory_key = derive_memory_key(memory_tier, text)
-            memory_value = derive_memory_value(memory_key, text)
-            dedupe_hash = None
-            filed_at = datetime.now(timezone.utc).isoformat()
-            if memory_key and memory_tier in {"user_preference", "project_memory"}:
-                current_memories = self.backend.query_drawers(
-                    query=None,
-                    wing=session["wing"],
-                    directory=session["directory"],
-                    memory_tier=memory_tier,
-                    current_only=True,
-                    limit=20,
-                )
-                current_match = next(
-                    (
-                        item
-                        for item in current_memories
-                        if item.get("memory_key") == memory_key
-                    ),
-                    None,
-                )
-                if current_match and current_match.get("memory_value") == memory_value:
-                    continue
-                self.backend.invalidate_memory_conflicts(
-                    wing=session["wing"],
-                    directory=session["directory"],
-                    memory_tier=memory_tier,
-                    memory_key=memory_key,
-                    valid_to=filed_at,
-                )
-            if memory_tier == "working_session":
-                dedupe_hash = _working_session_dedupe_hash(role, text)
-                if dedupe_hash in existing_working_hashes:
-                    continue
-            saved.append(
-                self.backend.save_entry(
-                    wing=session["wing"],
-                    room=self.config.default_room,
-                    content=content,
-                    source_file=f"session:{session_id}",
-                    metadata={
-                        "type": "opencode_message",
-                        "session_id": session_id,
-                        "message_id": info.get("id"),
-                        "role": role,
-                        "reason": reason,
-                        "directory": session["directory"],
-                        "memory_tier": memory_tier,
-                        "memory_key": memory_key,
-                        "memory_value": memory_value,
-                        "dedupe_hash": dedupe_hash,
-                        "valid_from": filed_at,
-                        "valid_to": None,
-                        "session_order": next_order,
-                    },
-                )
-            )
-            if dedupe_hash:
-                existing_working_hashes.add(dedupe_hash)
-
-        if messages:
-            session["last_saved_message_id"] = messages[-1].get("info", {}).get("id")
-        session["last_saved_order"] = next_order
-        session["last_saved_at"] = datetime.now(timezone.utc).isoformat()
-        self._runtime["last_flush_at"] = session["last_saved_at"]
-        self._save_state(state)
-        self._compact_working_session(session_id, session)
-        return {
-            "session_id": session_id,
-            "directory": session["directory"],
-            "wing": session["wing"],
-            "saved": len(saved),
-            "saved_drawer_ids": [item["drawer_id"] for item in saved],
-            "last_saved_message_id": session.get("last_saved_message_id"),
-            "reason": reason,
-        }
 
     def compact_session(
         self, session_id: str, directory: str, messages: list[dict[str, Any]]
     ) -> dict[str, Any]:
-        return self.flush_session(session_id, directory, messages, reason="compact")
+        return self.session_service.compact_session(session_id, directory, messages)
 
     def mcp_status(self) -> dict[str, Any]:
-        payload = self.backend.status()
-        payload.update(
-            {"service": "mempalace-bridge", "state_path": str(self.config.state_path)}
-        )
-        return payload
+        return self.query_service.mcp_status()
 
     def debug_status(self) -> dict[str, Any]:
-        payload = self.mcp_status()
-        payload.update(self.state_store.summary())
-        payload.update(self.backend.memory_stats())
-        payload.update(self._runtime)
-        return payload
+        return self.query_service.debug_status()
 
     def mcp_list_wings(self) -> dict[str, Any]:
-        return {"wings": self.backend.list_wings()}
+        return self.query_service.mcp_list_wings()
 
     def mcp_list_rooms(self, wing: str | None = None) -> dict[str, Any]:
-        try:
-            safe_wing = _sanitize_optional_name(wing, "wing")
-        except ValueError as exc:
-            return {"error": str(exc)}
-        return {
-            "wing": safe_wing or "all",
-            "rooms": self.backend.list_rooms(wing=safe_wing),
-        }
+        return self.query_service.mcp_list_rooms(wing=wing)
 
     def mcp_get_taxonomy(self) -> dict[str, Any]:
-        return self.backend.get_taxonomy()
+        return self.query_service.mcp_get_taxonomy()
 
     def mcp_get_drawer(self, drawer_id: str) -> dict[str, Any]:
-        result = self.backend.get_drawer(drawer_id)
-        return result or {"error": f"Drawer not found: {drawer_id}"}
+        return self.query_service.mcp_get_drawer(drawer_id)
 
     def mcp_search(
         self,
@@ -1380,34 +1273,15 @@ class BridgeCore:
         historical_only: bool = False,
         room: str | None = None,
     ) -> dict[str, Any]:
-        try:
-            safe_wing = _sanitize_optional_name(wing, "wing")
-            safe_memory_tier = _sanitize_optional_memory_tier(memory_tier)
-            safe_room = _sanitize_optional_name(room, "room")
-        except ValueError as exc:
-            return {"error": str(exc)}
-        results = [
-            self._format_public_hit(item)
-            for item in self.backend.query_drawers(
-                query=query,
-                wing=safe_wing,
-                memory_tier=safe_memory_tier,
-                current_only=current_only,
-                historical_only=historical_only,
-                room=safe_room,
-                limit=self._normalize_limit(limit, default=5),
-            )
-            if item.get("text") and float(item.get("similarity", 0)) > 0
-        ]
-        return {
-            "query": query,
-            "wing": safe_wing,
-            "memory_tier": safe_memory_tier,
-            "current_only": current_only,
-            "historical_only": historical_only,
-            "room": safe_room,
-            "results": results,
-        }
+        return self.query_service.mcp_search(
+            query=query,
+            limit=limit,
+            wing=wing,
+            memory_tier=memory_tier,
+            current_only=current_only,
+            historical_only=historical_only,
+            room=room,
+        )
 
     def mcp_list_drawers(
         self,
@@ -1422,43 +1296,18 @@ class BridgeCore:
         limit: int = 20,
         offset: int = 0,
     ) -> dict[str, Any]:
-        try:
-            safe_wing = _sanitize_optional_name(wing, "wing")
-            safe_room = _sanitize_optional_name(room, "room")
-            safe_memory_tier = _sanitize_optional_memory_tier(memory_tier)
-            safe_role = _sanitize_optional_role(role)
-        except ValueError as exc:
-            return {"error": str(exc)}
-
-        drawers = [
-            self._format_public_hit(item)
-            for item in self.backend.list_drawers(
-                wing=safe_wing,
-                room=safe_room,
-                session_id=session_id,
-                memory_tier=safe_memory_tier,
-                current_only=current_only,
-                historical_only=historical_only,
-                role=safe_role,
-                source_file=source_file,
-                limit=self._normalize_limit(limit),
-                offset=self._normalize_offset(offset),
-            )
-        ]
-        return {
-            "wing": safe_wing,
-            "room": safe_room,
-            "session_id": session_id,
-            "memory_tier": safe_memory_tier,
-            "current_only": current_only,
-            "historical_only": historical_only,
-            "role": safe_role,
-            "source_file": source_file,
-            "count": len(drawers),
-            "offset": self._normalize_offset(offset),
-            "limit": self._normalize_limit(limit),
-            "drawers": drawers,
-        }
+        return self.query_service.mcp_list_drawers(
+            wing=wing,
+            room=room,
+            session_id=session_id,
+            memory_tier=memory_tier,
+            current_only=current_only,
+            historical_only=historical_only,
+            role=role,
+            source_file=source_file,
+            limit=limit,
+            offset=offset,
+        )
 
     def mcp_list_sessions(
         self,
@@ -1467,26 +1316,12 @@ class BridgeCore:
         limit: int = 20,
         offset: int = 0,
     ) -> dict[str, Any]:
-        try:
-            safe_wing = _sanitize_optional_name(wing, "wing")
-            safe_room = _sanitize_optional_name(room, "room")
-        except ValueError as exc:
-            return {"error": str(exc)}
-
-        sessions = self.backend.list_sessions(
-            wing=safe_wing,
-            room=safe_room,
-            limit=self._normalize_limit(limit),
-            offset=self._normalize_offset(offset),
+        return self.query_service.mcp_list_sessions(
+            wing=wing,
+            room=room,
+            limit=limit,
+            offset=offset,
         )
-        return {
-            "wing": safe_wing,
-            "room": safe_room,
-            "count": len(sessions),
-            "offset": self._normalize_offset(offset),
-            "limit": self._normalize_limit(limit),
-            "sessions": sessions,
-        }
 
     def mcp_get_session_messages(
         self,
@@ -1498,37 +1333,209 @@ class BridgeCore:
         limit: int = 20,
         offset: int = 0,
     ) -> dict[str, Any]:
-        try:
-            safe_memory_tier = _sanitize_optional_memory_tier(memory_tier)
-            safe_role = _sanitize_optional_role(role)
-        except ValueError as exc:
-            return {"error": str(exc)}
-
-        messages = [
-            self._format_public_hit(item)
-            for item in self.backend.get_session_messages(
-                session_id=session_id,
-                memory_tier=safe_memory_tier,
-                current_only=current_only,
-                historical_only=historical_only,
-                role=safe_role,
-                limit=self._normalize_limit(limit),
-                offset=self._normalize_offset(offset),
-            )
-        ]
-        return {
-            "session_id": session_id,
-            "memory_tier": safe_memory_tier,
-            "current_only": current_only,
-            "historical_only": historical_only,
-            "role": safe_role,
-            "count": len(messages),
-            "offset": self._normalize_offset(offset),
-            "limit": self._normalize_limit(limit),
-            "messages": messages,
-        }
+        return self.query_service.mcp_get_session_messages(
+            session_id=session_id,
+            memory_tier=memory_tier,
+            current_only=current_only,
+            historical_only=historical_only,
+            role=role,
+            limit=limit,
+            offset=offset,
+        )
 
     def mcp_kg_query(
         self, entity: str, as_of: str | None = None, direction: str = "both"
     ) -> dict[str, Any]:
-        return self.backend.kg_query(entity, as_of=as_of, direction=direction)
+        return self.query_service.mcp_kg_query(entity, as_of=as_of, direction=direction)
+
+    def evomemory_status(self) -> dict[str, Any]:
+        return {
+            "service": "evomemory",
+            "context": self.mcp_status(),
+            "belief": self.belief_service.status(),
+            "governance": self.governance_service.status(),
+            "evaluation": self.evaluation_service.summary(),
+        }
+
+    def evomemory_query_beliefs(
+        self,
+        scope: str | None = None,
+        key: str | None = None,
+        current_only: bool = False,
+        historical_only: bool = False,
+        min_confidence: float | None = None,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        return self.belief_service.query(
+            scope=scope,
+            key=key,
+            current_only=current_only,
+            historical_only=historical_only,
+            min_confidence=min_confidence,
+            limit=self._normalize_limit(limit, default=10),
+        )
+
+    def evomemory_query_genes(
+        self,
+        scope: str | None = None,
+        key: str | None = None,
+        current_only: bool = False,
+        stale_only: bool = False,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        return self.governance_service.list_genes(
+            scope=scope,
+            key=key,
+            current_only=current_only,
+            stale_only=stale_only,
+            limit=self._normalize_limit(limit, default=10),
+        )
+
+    def evomemory_query_capsules(
+        self,
+        scope: str | None = None,
+        current_only: bool = False,
+        stale_only: bool = False,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        return self.governance_service.list_capsules(
+            scope=scope,
+            current_only=current_only,
+            stale_only=stale_only,
+            limit=self._normalize_limit(limit, default=10),
+        )
+
+    def evomemory_list_evolution_events(self, limit: int = 20) -> dict[str, Any]:
+        return self.governance_service.list_events(
+            limit=self._normalize_limit(limit, default=20)
+        )
+
+    def evomemory_evaluation_summary(self) -> dict[str, Any]:
+        return self.evaluation_service.summary()
+
+    def evomemory_list_feedback(
+        self,
+        *,
+        target_kind: str | None = None,
+        target_id: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        return self.evaluation_service.list_feedback(
+            target_kind=target_kind,
+            target_id=target_id,
+            limit=self._normalize_limit(limit, default=20),
+        )
+
+    def evomemory_record_feedback(
+        self,
+        *,
+        target_kind: str,
+        target_id: str,
+        signal: str,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        if target_kind == "belief":
+            target = self.belief_service.apply_feedback(
+                target_id=target_id,
+                signal=signal,
+                note=note,
+            )
+        else:
+            target = self.governance_service.apply_feedback(
+                target_kind=target_kind,
+                target_id=target_id,
+                signal=signal,
+                note=note,
+            )
+        self.governance_service.record_event(
+            action="feedback",
+            target_kind=target_kind,
+            target_id=target_id,
+            rationale=note or signal,
+        )
+        feedback_record = self.evaluation_service.record_feedback(
+            target_kind=target_kind,
+            target_id=target_id,
+            signal=signal,
+            delta=target["delta"],
+            note=note,
+        )
+        return {
+            "target": target,
+            "signal": signal,
+            "delta": target["delta"],
+            "note": note,
+            "record": feedback_record,
+        }
+
+    def evomemory_run_revision(self, *, min_confidence: float = 0.5) -> dict[str, Any]:
+        result = self.belief_service.run_revision(min_confidence=min_confidence)
+        revised_ids = [item["id"] for item in result["revised_beliefs"]]
+        demoted = self.governance_service.demote_assets_for_revised_beliefs(revised_ids)
+        if result["revised_count"]:
+            self.evaluation_service.increment("revision_runs")
+            self.evaluation_service.increment(
+                "revised_beliefs", result["revised_count"]
+            )
+            for belief in result["revised_beliefs"]:
+                self.evaluation_service.increment("stale_beliefs")
+                self.governance_service.record_event(
+                    action="revision",
+                    target_kind="belief",
+                    target_id=belief["id"],
+                    rationale=f"confidence below {min_confidence}",
+                )
+            for gene in demoted.get("genes", []):
+                self.evaluation_service.increment("gene_demotions")
+                self.governance_service.record_event(
+                    action="demote",
+                    target_kind="gene",
+                    target_id=gene["id"],
+                    rationale="demoted by revision sweep",
+                )
+            for capsule in demoted.get("capsules", []):
+                self.evaluation_service.increment("capsule_demotions")
+                self.governance_service.record_event(
+                    action="demote",
+                    target_kind="capsule",
+                    target_id=capsule["id"],
+                    rationale="demoted by revision sweep",
+                )
+        return {
+            **result,
+            "demoted_genes": demoted.get("genes", []),
+            "demoted_capsules": demoted.get("capsules", []),
+        }
+
+    def evomemory_export_snapshot(self, *, limit: int = 20) -> dict[str, Any]:
+        normalized_limit = self._normalize_limit(limit, default=20)
+        beliefs = self.evomemory_query_beliefs(limit=normalized_limit)
+        genes = self.evomemory_query_genes(limit=normalized_limit)
+        capsules = self.evomemory_query_capsules(limit=normalized_limit)
+        events = self.evomemory_list_evolution_events(limit=normalized_limit)
+        feedback = self.evomemory_list_feedback(limit=normalized_limit)
+        return {
+            "service": "evomemory",
+            "context": self.mcp_status(),
+            "belief": beliefs,
+            "governance": {
+                "gene_count": genes["count"],
+                "genes": genes["genes"],
+                "capsule_count": capsules["count"],
+                "capsules": capsules["capsules"],
+                "event_count": events["count"],
+                "events": events["events"],
+            },
+            "evaluation": self.evaluation_service.summary(),
+            "feedback": feedback,
+        }
+
+    def evomemory_run_benchmark(self, *, limit: int = 20) -> dict[str, Any]:
+        from evomemory.evaluation import BenchmarkRunner
+
+        snapshot = self.evomemory_export_snapshot(limit=limit)
+        result = BenchmarkRunner().run(snapshot)
+        return {
+            **result,
+            "limit": self._normalize_limit(limit, default=20),
+        }

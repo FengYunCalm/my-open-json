@@ -28,7 +28,7 @@ export function messagesSinceCheckpoint(messages = [], checkpoint = null) {
 export function buildSystemBlock(payload, maxChars = 1800) {
   if (!payload?.results?.length) return ''
   const lines = [
-    `MemPalace context for wing '${payload.wing ?? 'unknown'}':`,
+    `EvoMemory context for wing '${payload.wing ?? 'unknown'}':`,
   ]
   let used = lines[0].length
   for (const [index, item] of payload.results.entries()) {
@@ -60,8 +60,8 @@ export function buildDirectBridgeLaunch(config = {}, env = process.env) {
   const directBridgeCommand = Array.isArray(config.directBridgeCommand)
     ? config.directBridgeCommand
     : [
-        path.join(home, '.local', 'opt', 'mempalace-opencode', 'venv', 'bin', 'python'),
-        path.join(home, '.config', 'opencode', 'mcp', 'mempalace_bridge_server.py'),
+        path.join(home, '.local', 'opt', 'evomemory-opencode', 'venv', 'bin', 'python'),
+        path.join(home, '.config', 'opencode', 'mcp', 'evomemory', 'interfaces', 'mcp', 'server.py'),
         '--host',
         bridgeUrl.hostname,
         '--port',

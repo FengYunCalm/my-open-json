@@ -7,4 +7,5 @@ logs/
 *.pyc
 mcp/mempalace_bridge_state.json
 mcp/mempalace_bridge_state.json.bak
+mcp/evomemory.egg-info/
 bun.lock

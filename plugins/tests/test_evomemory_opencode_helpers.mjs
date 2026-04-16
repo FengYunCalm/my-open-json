@@ -5,11 +5,11 @@ import {
   buildDirectBridgeLaunch,
   buildSystemBlock,
   shouldSearch,
-} from '../mempalace-opencode.helpers.mjs'
+} from '../evomemory-opencode.helpers.mjs'
 
 test('shouldSearch ignores tiny small-talk and slash commands', () => {
   assert.equal(shouldSearch('ok', { minSearchChars: 16 }), false)
-  assert.equal(shouldSearch('/mempalace:status', { minSearchChars: 16 }), false)
+  assert.equal(shouldSearch('/evomemory:status', { minSearchChars: 16 }), false)
   assert.equal(shouldSearch('drawer navigation is missing from search results', { minSearchChars: 16 }), true)
 })
 
@@ -47,8 +47,8 @@ test('buildDirectBridgeLaunch derives a direct fallback bridge command', () => {
   )
 
   assert.deepEqual(launch?.cmd, [
-    '/home/tester/.local/opt/mempalace-opencode/venv/bin/python',
-    '/home/tester/.config/opencode/mcp/mempalace_bridge_server.py',
+    '/home/tester/.local/opt/evomemory-opencode/venv/bin/python',
+    '/home/tester/.config/opencode/mcp/evomemory/interfaces/mcp/server.py',
     '--host',
     '127.0.0.1',
     '--port',

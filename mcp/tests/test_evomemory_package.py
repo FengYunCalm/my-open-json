@@ -1,0 +1,1108 @@
+from __future__ import annotations
+
+import sys
+import tempfile
+from pathlib import Path
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
+class PromotionBackend:
+    def __init__(self):
+        self.saved_entries = []
+
+    def query_drawers(
+        self,
+        *,
+        query=None,
+        wing=None,
+        directory=None,
+        memory_tier=None,
+        current_only=False,
+        historical_only=False,
+        room=None,
+        session_id=None,
+        role=None,
+        source_file=None,
+        limit=20,
+        offset=0,
+    ):
+        rows = []
+        for entry in self.saved_entries:
+            metadata = entry["metadata"]
+            row = {
+                "drawer_id": entry["drawer_id"],
+                "text": entry["content"],
+                "wing": entry["wing"],
+                "room": entry["room"],
+                "directory": metadata.get("directory"),
+                "source_file": entry["source_file"],
+                "session_id": metadata.get("session_id"),
+                "message_id": metadata.get("message_id"),
+                "role": metadata.get("role"),
+                "memory_tier": metadata.get("memory_tier"),
+                "memory_key": metadata.get("memory_key"),
+                "memory_value": metadata.get("memory_value"),
+                "dedupe_hash": metadata.get("dedupe_hash"),
+                "valid_from": metadata.get("valid_from"),
+                "valid_to": metadata.get("valid_to"),
+                "filed_at": metadata.get("filed_at"),
+                "working_summary": metadata.get("working_summary") is True,
+                "metadata": metadata,
+                "similarity": 1.0,
+            }
+            rows.append(row)
+        if wing is not None:
+            rows = [row for row in rows if row["wing"] == wing]
+        if directory is not None:
+            rows = [row for row in rows if row.get("directory") == directory]
+        if memory_tier is not None:
+            rows = [row for row in rows if row.get("memory_tier") == memory_tier]
+        if room is not None:
+            rows = [row for row in rows if row["room"] == room]
+        if session_id is not None:
+            rows = [row for row in rows if row.get("session_id") == session_id]
+        if role is not None:
+            rows = [row for row in rows if row.get("role") == role]
+        if source_file is not None:
+            rows = [row for row in rows if row.get("source_file") == source_file]
+        if current_only:
+            rows = [row for row in rows if not row.get("valid_to")]
+        elif historical_only:
+            rows = [row for row in rows if row.get("valid_to")]
+        rows.sort(
+            key=lambda row: (row.get("valid_from") or "", row.get("message_id") or "")
+        )
+        return rows[offset : offset + limit]
+
+    def get_session_messages(self, **kwargs):
+        return self.query_drawers(**kwargs)
+
+    def save_entry(self, *, wing, room, content, source_file, metadata):
+        payload = {
+            "drawer_id": f"drawer_{metadata.get('message_id', len(self.saved_entries) + 1)}",
+            "wing": wing,
+            "room": room,
+            "source_file": source_file,
+            "metadata": metadata,
+            "content": content,
+        }
+        self.saved_entries.append(payload)
+        return payload
+
+    def invalidate_memory_conflicts(
+        self, *, wing, directory, memory_tier, memory_key, valid_to
+    ):
+        invalidated = 0
+        for entry in self.saved_entries:
+            metadata = entry["metadata"]
+            if entry["wing"] != wing:
+                continue
+            if metadata.get("directory") != directory:
+                continue
+            if metadata.get("memory_tier") != memory_tier:
+                continue
+            if metadata.get("memory_key") != memory_key:
+                continue
+            if metadata.get("valid_to"):
+                continue
+            metadata["valid_to"] = valid_to
+            invalidated += 1
+        return invalidated
+
+    def invalidate_drawers(self, *, drawer_ids, valid_to):
+        invalidated = 0
+        ids = set(drawer_ids)
+        for entry in self.saved_entries:
+            if entry["drawer_id"] not in ids:
+                continue
+            if entry["metadata"].get("valid_to"):
+                continue
+            entry["metadata"]["valid_to"] = valid_to
+            invalidated += 1
+        return invalidated
+
+    def status(self):
+        return {"total_drawers": len(self.saved_entries), "palace_path": "/tmp/palace"}
+
+    def memory_stats(self):
+        return {}
+
+    def list_wings(self):
+        return {}
+
+    def list_rooms(self, wing=None):
+        return {}
+
+    def get_taxonomy(self):
+        return {}
+
+    def list_drawers(self, **kwargs):
+        return self.query_drawers(**kwargs)
+
+    def get_drawer(self, drawer_id):
+        return next(
+            (entry for entry in self.saved_entries if entry["drawer_id"] == drawer_id),
+            None,
+        )
+
+    def list_sessions(self, **kwargs):
+        return []
+
+    def kg_query(self, entity, as_of=None, direction="both"):
+        return {
+            "entity": entity,
+            "facts": [],
+            "count": 0,
+            "as_of": as_of,
+            "direction": direction,
+        }
+
+
+def test_evomemory_exposes_phase_one_contracts_and_modules():
+    from evomemory import BeliefPlaneService, GovernancePlaneService
+    from evomemory.contracts import Capsule, EvolutionEvent, Gene, MemoryRecord
+    from evomemory.context.bridge import BridgeConfig, BridgeCore, MempalaceBackend
+    from evomemory.context.query_service import ContextQueryService
+    from evomemory.context.repository import ContextRepository
+    from evomemory.context.session_service import SessionLifecycleService
+    from evomemory.domain.memory_policy import classify_memory_tier
+    from evomemory.infrastructure.state.session_state import SessionStateStore
+    from evomemory.interfaces.mcp.server import create_app
+
+    record = MemoryRecord(
+        scope="session",
+        plane="context",
+        kind="event",
+        key="message",
+        value="hello",
+    )
+    gene = Gene(id="gene_skill_reuse", summary="avoid duplicate skill reloads")
+    capsule = Capsule(id="capsule_debugging", summary="debugging workflow")
+    event = EvolutionEvent(
+        id="event_001",
+        action="promote",
+        target_kind="gene",
+        target_id="gene_skill_reuse",
+    )
+
+    assert record.scope == "session"
+    assert gene.id == "gene_skill_reuse"
+    assert capsule.id == "capsule_debugging"
+    assert event.target_kind == "gene"
+    assert BridgeConfig is not None
+    assert BridgeCore is not None
+    assert BeliefPlaneService is not None
+    assert ContextRepository is not None
+    assert SessionLifecycleService is not None
+    assert ContextQueryService is not None
+    assert GovernancePlaneService is not None
+    assert MempalaceBackend is not None
+    assert classify_memory_tier("user", "以后都用中文") == "user_preference"
+    assert SessionStateStore is not None
+    assert create_app is not None
+
+
+def test_evomemory_ships_opencode_mcp_template():
+    template = (
+        Path(__file__).resolve().parents[1]
+        / "evomemory"
+        / "adapters"
+        / "opencode"
+        / "opencode.mcp.remote.jsonc"
+    )
+
+    assert template.exists()
+    assert '"evomemory"' in template.read_text(encoding="utf-8")
+
+
+def test_bridge_core_exposes_evomemory_unified_query_surface():
+    import importlib.util
+
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-belief-"))
+    core = BridgeCore(
+        BridgeConfig(state_path=temp_dir / "state.json"), backend=PromotionBackend()
+    )
+
+    status = core.evomemory_status()
+    assert status["service"] == "evomemory"
+    assert status["context"]["service"] == "mempalace-bridge"
+    assert status["belief"]["plane"] == "belief"
+    assert status["governance"]["plane"] == "governance"
+    assert core.evomemory_query_beliefs()["facts"] == []
+    assert core.evomemory_query_genes()["genes"] == []
+    assert core.evomemory_query_capsules()["capsules"] == []
+    assert core.evomemory_list_evolution_events()["events"] == []
+
+
+def test_memory_reviser_skips_duplicate_current_value_and_invalidates_conflicts():
+    from evomemory.belief.reviser import MemoryReviser
+    from evomemory.context.repository import ContextRepository
+
+    backend = PromotionBackend()
+    repository = ContextRepository(backend)
+    reviser = MemoryReviser(repository)
+
+    backend.save_entry(
+        wing="opencode",
+        room="opencode-session",
+        content="User:\n以后都用中文回复",
+        source_file="session:ses_rev",
+        metadata={
+            "session_id": "ses_rev",
+            "message_id": "msg_rev_1",
+            "directory": "/home/mechrevo/.config/opencode",
+            "memory_tier": "user_preference",
+            "memory_key": "response_language",
+            "memory_value": "zh-cn",
+            "valid_from": "2026-04-16T00:00:00+00:00",
+            "valid_to": None,
+        },
+    )
+
+    duplicate = reviser.revise_memory(
+        wing="opencode",
+        directory="/home/mechrevo/.config/opencode",
+        memory_tier="user_preference",
+        memory_key="response_language",
+        memory_value="zh-cn",
+        valid_to="2026-04-16T00:01:00+00:00",
+    )
+    changed = reviser.revise_memory(
+        wing="opencode",
+        directory="/home/mechrevo/.config/opencode",
+        memory_tier="user_preference",
+        memory_key="response_language",
+        memory_value="en",
+        valid_to="2026-04-16T00:02:00+00:00",
+    )
+
+    assert duplicate["skip_save"] is True
+    assert changed["skip_save"] is False
+    assert changed["invalidated_count"] == 1
+    assert (
+        backend.saved_entries[0]["metadata"]["valid_to"] == "2026-04-16T00:02:00+00:00"
+    )
+
+
+def test_memory_promoter_promotes_beliefs_and_governance_assets():
+    from evomemory.belief.promoter import MemoryPromoter
+    from evomemory.belief.service import BeliefPlaneService
+    from evomemory.governance.service import GovernancePlaneService
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-promoter-"))
+    belief = BeliefPlaneService(temp_dir / "state.sqlite3")
+    governance = GovernancePlaneService(temp_dir / "state.sqlite3")
+    promoter = MemoryPromoter(belief, governance)
+
+    result = promoter.promote_saved_memory(
+        scope="project",
+        memory_tier="project_memory",
+        memory_key="git_commit_behavior",
+        memory_value="disabled",
+        source_session="ses_promote",
+        source_message_id="msg_promote_1",
+        source_record_id="drawer_msg_promote_1",
+        valid_from="2026-04-16T00:00:00+00:00",
+    )
+
+    assert result["belief"]["key"] == "git_commit_behavior"
+    assert result["gene"]["key"] == "git_commit_behavior"
+    assert result["capsule"]["scope"] == "project"
+    assert {item["action"] for item in result["events"]} >= {"promote"}
+
+
+def test_flush_session_promotes_memories_into_belief_plane():
+    import importlib.util
+
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-belief-conflict-"))
+    core = BridgeCore(
+        BridgeConfig(state_path=temp_dir / "state.json"), backend=PromotionBackend()
+    )
+    core.start_session("ses_belief", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_belief",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_pref", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_proj", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                ],
+            },
+        ],
+        reason="idle",
+    )
+
+    user_beliefs = core.evomemory_query_beliefs(
+        scope="user", key="response_language", current_only=True
+    )
+    project_beliefs = core.evomemory_query_beliefs(
+        scope="project", key="git_commit_behavior", current_only=True
+    )
+    genes = core.evomemory_query_genes(limit=10)
+    capsules = core.evomemory_query_capsules(limit=10)
+    status = core.evomemory_status()
+
+    assert user_beliefs["count"] == 1
+    assert user_beliefs["facts"][0]["value"] == "zh-cn"
+    assert user_beliefs["facts"][0]["memory_tier"] == "user_preference"
+    assert project_beliefs["count"] == 1
+    assert project_beliefs["facts"][0]["value"] == "disabled"
+    assert project_beliefs["facts"][0]["memory_tier"] == "project_memory"
+    assert genes["count"] == 2
+    assert {item["key"] for item in genes["genes"]} >= {
+        "response_language",
+        "git_commit_behavior",
+    }
+    assert capsules["count"] == 2
+    assert {item["scope"] for item in capsules["capsules"]} >= {"user", "project"}
+    assert status["belief"]["fact_count"] == 2
+
+
+def test_reaffirming_current_belief_updates_metadata_without_creating_new_fact():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-belief-metadata-"))
+    core = BridgeCore(
+        BridgeConfig(state_path=temp_dir / "state.sqlite3"), backend=PromotionBackend()
+    )
+    core.start_session("ses_belief_meta", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_belief_meta",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_meta_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            }
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_belief_meta",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_meta_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_meta_2", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            },
+        ],
+        reason="idle",
+    )
+
+    beliefs = core.evomemory_query_beliefs(
+        scope="user", key="response_language", current_only=True
+    )
+
+    assert beliefs["count"] == 1
+    assert beliefs["facts"][0]["value"] == "zh-cn"
+    assert beliefs["facts"][0]["source_count"] == 2
+    assert beliefs["facts"][0]["last_confirmed_at"] is not None
+    assert beliefs["facts"][0]["confidence"] > 0.6
+
+
+def test_belief_query_supports_min_confidence_filter():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-belief-filter-"))
+    core = BridgeCore(
+        BridgeConfig(state_path=temp_dir / "state.sqlite3"), backend=PromotionBackend()
+    )
+    core.start_session("ses_belief_filter", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_belief_filter",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_filter_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_filter_2", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                ],
+            },
+            {
+                "info": {"id": "msg_filter_3", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            },
+        ],
+        reason="idle",
+    )
+
+    all_beliefs = core.evomemory_query_beliefs(current_only=True, limit=10)
+    strong_beliefs = core.evomemory_query_beliefs(
+        current_only=True,
+        min_confidence=0.75,
+        limit=10,
+    )
+
+    assert all_beliefs["count"] >= 2
+    assert strong_beliefs["count"] == 1
+    assert strong_beliefs["facts"][0]["key"] == "response_language"
+
+
+def test_conflicting_beliefs_supersede_previous_fact_and_record_events():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-belief-conflict-"))
+    core = BridgeCore(
+        BridgeConfig(state_path=temp_dir / "state.json"), backend=PromotionBackend()
+    )
+    core.start_session("ses_conflict", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_conflict",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_pref_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            }
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_conflict",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_pref_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_pref_2", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用英文回复"}],
+            },
+        ],
+        reason="idle",
+    )
+
+    current_beliefs = core.evomemory_query_beliefs(
+        scope="user", key="response_language", current_only=True
+    )
+    historical_beliefs = core.evomemory_query_beliefs(
+        scope="user", key="response_language", historical_only=True
+    )
+    events = core.evomemory_list_evolution_events(limit=10)
+
+    assert current_beliefs["count"] == 1
+    assert current_beliefs["facts"][0]["value"] == "en"
+    assert historical_beliefs["count"] == 1
+    assert historical_beliefs["facts"][0]["value"] == "zh-cn"
+    assert (
+        historical_beliefs["facts"][0]["superseded_by"]
+        == current_beliefs["facts"][0]["id"]
+    )
+    assert events["count"] >= 2
+    assert {item["action"] for item in events["events"]} >= {"promote", "supersede"}
+
+
+def test_beliefs_and_events_persist_across_bridge_instances():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-persist-"))
+    state_path = temp_dir / "state.sqlite3"
+
+    core_a = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+    core_a.start_session("ses_persist", "/home/mechrevo/.config/opencode")
+    core_a.flush_session(
+        "ses_persist",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_pref_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_pref_2", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用英文回复"}],
+            },
+        ],
+        reason="idle",
+    )
+
+    core_b = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+    current_beliefs = core_b.evomemory_query_beliefs(
+        scope="user", key="response_language", current_only=True
+    )
+    historical_beliefs = core_b.evomemory_query_beliefs(
+        scope="user", key="response_language", historical_only=True
+    )
+    genes = core_b.evomemory_query_genes(limit=10)
+    capsules = core_b.evomemory_query_capsules(limit=10)
+    events = core_b.evomemory_list_evolution_events(limit=10)
+
+    assert current_beliefs["count"] == 1
+    assert current_beliefs["facts"][0]["value"] == "en"
+    assert historical_beliefs["count"] == 1
+    assert historical_beliefs["facts"][0]["value"] == "zh-cn"
+    assert genes["count"] >= 2
+    assert capsules["count"] >= 1
+    assert events["count"] >= 2
+
+
+def test_search_context_includes_beliefs_and_governance_assets():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-runtime-"))
+    core = BridgeCore(
+        BridgeConfig(state_path=temp_dir / "state.sqlite3"), backend=PromotionBackend()
+    )
+    core.start_session("ses_runtime", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_runtime",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_pref", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_proj", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                ],
+            },
+        ],
+        reason="idle",
+    )
+
+    result = core.search_context(
+        "git commit",
+        "/home/mechrevo/.config/opencode",
+        session_id="ses_runtime",
+    )
+
+    assert result["belief_memory_count"] == 2
+    assert {item["key"] for item in result["belief_memory"]} >= {
+        "response_language",
+        "git_commit_behavior",
+    }
+    assert result["governance_assets"]["gene_count"] >= 2
+    assert result["governance_assets"]["capsule_count"] >= 1
+    assert "Belief memory:" in result["system_block"]
+    assert "Governance assets:" in result["system_block"]
+
+
+def test_evaluation_summary_tracks_promotions_supersedes_and_enriched_searches():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-eval-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+    core.start_session("ses_eval", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_eval",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_eval_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_eval_2", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                ],
+            },
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_eval",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_eval_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_eval_2", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                ],
+            },
+            {
+                "info": {"id": "msg_eval_3", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用英文回复"}],
+            },
+        ],
+        reason="idle",
+    )
+    core.search_context(
+        "git commit",
+        "/home/mechrevo/.config/opencode",
+        session_id="ses_eval",
+    )
+
+    summary = core.evomemory_evaluation_summary()
+
+    assert summary["metrics"]["belief_promotions"] >= 3
+    assert summary["metrics"]["belief_supersedes"] >= 1
+    assert summary["metrics"]["gene_promotions"] >= 2
+    assert summary["metrics"]["capsule_promotions"] >= 2
+    assert summary["metrics"]["search_context_calls"] >= 1
+    assert summary["metrics"]["enriched_searches"] >= 1
+
+
+def test_feedback_updates_governance_scores_and_evaluation_metrics():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-feedback-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+    core.start_session("ses_feedback", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_feedback",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_feedback_1", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                ],
+            }
+        ],
+        reason="idle",
+    )
+
+    gene_id = core.evomemory_query_genes(scope="project", current_only=True, limit=10)[
+        "genes"
+    ][0]["id"]
+    capsule_id = core.evomemory_query_capsules(
+        scope="project", current_only=True, limit=10
+    )["capsules"][0]["id"]
+
+    gene_feedback = core.evomemory_record_feedback(
+        target_kind="gene",
+        target_id=gene_id,
+        signal="success",
+        note="This gene helped complete the task.",
+    )
+    capsule_feedback = core.evomemory_record_feedback(
+        target_kind="capsule",
+        target_id=capsule_id,
+        signal="reject",
+        note="This capsule overfit the current task.",
+    )
+
+    genes = core.evomemory_query_genes(scope="project", limit=10)
+    capsules = core.evomemory_query_capsules(scope="project", limit=10)
+    summary = core.evomemory_evaluation_summary()
+    events = core.evomemory_list_evolution_events(limit=20)
+
+    assert gene_feedback["target"]["id"] == gene_id
+    assert gene_feedback["target"]["score"] >= 1
+    assert capsule_feedback["target"]["id"] == capsule_id
+    assert capsule_feedback["target"]["score"] <= 0
+    assert any(item["id"] == gene_id and item["score"] >= 1 for item in genes["genes"])
+    assert any(
+        item["id"] == capsule_id and item["score"] <= 0 for item in capsules["capsules"]
+    )
+    assert summary["metrics"]["feedback_records"] >= 2
+    assert summary["metrics"]["positive_feedback"] >= 1
+    assert summary["metrics"]["negative_feedback"] >= 1
+    assert any(item["action"] == "feedback" for item in events["events"])
+
+
+def test_feedback_policy_is_signal_specific_and_feedback_log_is_queryable():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-feedback-policy-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+    core.start_session("ses_feedback_policy", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_feedback_policy",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_feedback_policy_1", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                ],
+            }
+        ],
+        reason="idle",
+    )
+
+    gene_id = core.evomemory_query_genes(scope="project", current_only=True, limit=10)[
+        "genes"
+    ][0]["id"]
+    capsule_id = core.evomemory_query_capsules(
+        scope="project", current_only=True, limit=10
+    )["capsules"][0]["id"]
+
+    confirm_feedback = core.evomemory_record_feedback(
+        target_kind="gene",
+        target_id=gene_id,
+        signal="confirm",
+        note="Still valid for this repository.",
+    )
+    correct_feedback = core.evomemory_record_feedback(
+        target_kind="capsule",
+        target_id=capsule_id,
+        signal="correct",
+        note="This capsule should be narrowed down.",
+    )
+
+    project_feedback = core.evomemory_list_feedback(
+        target_kind="capsule", target_id=capsule_id, limit=10
+    )
+    all_feedback = core.evomemory_list_feedback(limit=10)
+    summary = core.evomemory_evaluation_summary()
+
+    assert confirm_feedback["target"]["score"] >= 1
+    assert confirm_feedback["delta"] == 1
+    assert correct_feedback["target"]["score"] <= -1
+    assert correct_feedback["delta"] == -2
+    assert correct_feedback["target"]["is_stale"] is True
+    assert project_feedback["count"] == 1
+    assert project_feedback["records"][0]["signal"] == "correct"
+    assert all_feedback["count"] >= 2
+    assert summary["metrics"]["feedback_confirm"] >= 1
+    assert summary["metrics"]["feedback_correct"] >= 1
+
+
+def test_export_snapshot_returns_all_planes():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-snapshot-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+    core.start_session("ses_snapshot", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_snapshot",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_snapshot_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_snapshot_2", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                ],
+            },
+        ],
+        reason="idle",
+    )
+    core.search_context(
+        "git commit",
+        "/home/mechrevo/.config/opencode",
+        session_id="ses_snapshot",
+    )
+
+    snapshot = core.evomemory_export_snapshot(limit=10)
+
+    assert snapshot["service"] == "evomemory"
+    assert snapshot["context"]["service"] == "mempalace-bridge"
+    assert snapshot["belief"]["count"] >= 2
+    assert snapshot["governance"]["gene_count"] >= 2
+    assert snapshot["governance"]["capsule_count"] >= 1
+    assert snapshot["evaluation"]["metrics"]["search_context_calls"] >= 1
+    assert snapshot["feedback"]["count"] == 0
+
+
+def test_benchmark_runner_scores_snapshot_health():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-benchmark-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+    core.start_session("ses_benchmark", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_benchmark",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_benchmark_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_benchmark_2", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                ],
+            },
+        ],
+        reason="idle",
+    )
+    core.search_context(
+        "git commit",
+        "/home/mechrevo/.config/opencode",
+        session_id="ses_benchmark",
+    )
+    gene_id = core.evomemory_query_genes(scope="project", current_only=True, limit=10)[
+        "genes"
+    ][0]["id"]
+    core.evomemory_record_feedback(
+        target_kind="gene",
+        target_id=gene_id,
+        signal="success",
+        note="Benchmark setup success.",
+    )
+
+    benchmark = core.evomemory_run_benchmark(limit=10)
+
+    assert benchmark["score"] >= 3
+    assert benchmark["checks"]["belief_present"] is True
+    assert benchmark["checks"]["governance_present"] is True
+    assert benchmark["checks"]["feedback_present"] is True
+    assert benchmark["checks"]["search_enrichment_present"] is True
+
+
+def test_belief_feedback_updates_confidence_and_audit_log():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-belief-feedback-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+    core.start_session("ses_belief_feedback", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_belief_feedback",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_belief_feedback_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            }
+        ],
+        reason="idle",
+    )
+
+    belief = core.evomemory_query_beliefs(
+        scope="user", key="response_language", current_only=True, limit=10
+    )["facts"][0]
+
+    confirm_feedback = core.evomemory_record_feedback(
+        target_kind="belief",
+        target_id=belief["id"],
+        signal="confirm",
+        note="Still true for the current user.",
+    )
+    correct_feedback = core.evomemory_record_feedback(
+        target_kind="belief",
+        target_id=belief["id"],
+        signal="correct",
+        note="This belief should be reconsidered.",
+    )
+
+    updated_belief = core.evomemory_query_beliefs(
+        scope="user", key="response_language", current_only=True, limit=10
+    )["facts"][0]
+    feedback_log = core.evomemory_list_feedback(
+        target_kind="belief", target_id=belief["id"], limit=10
+    )
+    summary = core.evomemory_evaluation_summary()
+
+    assert confirm_feedback["target"]["id"] == belief["id"]
+    assert confirm_feedback["delta"] == 1
+    assert correct_feedback["delta"] == -2
+    assert updated_belief["confidence"] < 1.0
+    assert updated_belief["last_confirmed_at"] is not None
+    assert feedback_log["count"] == 2
+    assert {item["signal"] for item in feedback_log["records"]} == {
+        "confirm",
+        "correct",
+    }
+    assert summary["metrics"]["feedback_confirm"] >= 1
+    assert summary["metrics"]["feedback_correct"] >= 1
+
+
+def test_revision_marks_low_confidence_beliefs_stale_and_demotes_assets():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-revision-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+    core.start_session("ses_revision", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_revision",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_revision_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            }
+        ],
+        reason="idle",
+    )
+
+    belief = core.evomemory_query_beliefs(
+        scope="user", key="response_language", current_only=True, limit=10
+    )["facts"][0]
+    gene = core.evomemory_query_genes(scope="user", current_only=True, limit=10)[
+        "genes"
+    ][0]
+    capsule = core.evomemory_query_capsules(scope="user", current_only=True, limit=10)[
+        "capsules"
+    ][0]
+
+    core.evomemory_record_feedback(
+        target_kind="belief",
+        target_id=belief["id"],
+        signal="correct",
+        note="This belief is weak and should be revised.",
+    )
+    revision = core.evomemory_run_revision(min_confidence=0.5)
+
+    current_beliefs = core.evomemory_query_beliefs(
+        scope="user", key="response_language", current_only=True, limit=10
+    )
+    historical_beliefs = core.evomemory_query_beliefs(
+        scope="user", key="response_language", historical_only=True, limit=10
+    )
+    stale_genes = core.evomemory_query_genes(scope="user", stale_only=True, limit=10)
+    stale_capsules = core.evomemory_query_capsules(
+        scope="user", stale_only=True, limit=10
+    )
+    summary = core.evomemory_evaluation_summary()
+
+    assert revision["revised_count"] == 1
+    assert revision["revised_beliefs"][0]["id"] == belief["id"]
+    assert current_beliefs["count"] == 0
+    assert historical_beliefs["count"] == 1
+    assert historical_beliefs["facts"][0]["is_stale"] is True
+    assert any(
+        item["id"] == gene["id"] and item["is_stale"] is True
+        for item in stale_genes["genes"]
+    )
+    assert any(
+        item["id"] == capsule["id"] and item["is_stale"] is True
+        for item in stale_capsules["capsules"]
+    )
+    assert summary["metrics"]["revision_runs"] >= 1
+    assert summary["metrics"]["revised_beliefs"] >= 1
+
+
+def test_governance_scores_and_stale_detection_are_tracked():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-score-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+    core.start_session("ses_score", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_score",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_score_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_score_2", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用英文回复"}],
+            },
+        ],
+        reason="idle",
+    )
+    core.search_context(
+        "回复",
+        "/home/mechrevo/.config/opencode",
+        session_id="ses_score",
+    )
+
+    genes = core.evomemory_query_genes(limit=10)
+    capsules = core.evomemory_query_capsules(limit=10)
+    historical_beliefs = core.evomemory_query_beliefs(
+        scope="user", key="response_language", historical_only=True
+    )
+    summary = core.evomemory_evaluation_summary()
+
+    assert any(item.get("score", 0) > 0 for item in genes["genes"])
+    assert any(item.get("score", 0) > 0 for item in capsules["capsules"])
+    assert historical_beliefs["facts"][0].get("is_stale") is True
+    stale_genes = [item for item in genes["genes"] if item.get("is_stale") is True]
+    assert stale_genes
+    assert summary["metrics"]["stale_beliefs"] >= 1
+    assert summary["metrics"]["gene_score_updates"] >= 1
+    assert summary["metrics"]["capsule_score_updates"] >= 1
+    assert summary["metrics"]["gene_demotions"] >= 1
+
+
+def test_governance_queries_support_scope_and_stale_filters():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-governance-filter-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+    core.start_session("ses_gov_filter", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_gov_filter",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_user_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_user_2", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用英文回复"}],
+            },
+            {
+                "info": {"id": "msg_proj_1", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                ],
+            },
+        ],
+        reason="idle",
+    )
+
+    stale_user_genes = core.evomemory_query_genes(
+        scope="user", stale_only=True, limit=10
+    )
+    current_user_genes = core.evomemory_query_genes(
+        scope="user", current_only=True, limit=10
+    )
+    project_capsules = core.evomemory_query_capsules(
+        scope="project", current_only=True, limit=10
+    )
+
+    assert stale_user_genes["count"] >= 1
+    assert all(
+        item["scope"] == "user" and item["is_stale"] is True
+        for item in stale_user_genes["genes"]
+    )
+    assert current_user_genes["count"] >= 1
+    assert all(
+        item["scope"] == "user" and item["is_stale"] is False
+        for item in current_user_genes["genes"]
+    )
+    assert project_capsules["count"] == 1
+    assert project_capsules["capsules"][0]["scope"] == "project"
+    assert project_capsules["capsules"][0]["is_stale"] is False
+
+
+def test_canonical_modules_live_under_evomemory_namespace():
+    from evomemory.context.bridge import BridgeConfig, BridgeCore, MempalaceBackend
+    from evomemory.domain.memory_policy import classify_memory_tier
+    from evomemory.infrastructure.state.session_state import SessionStateStore
+    from evomemory.interfaces.mcp.server import create_app
+
+    assert BridgeConfig.__module__ == "evomemory.context.bridge"
+    assert BridgeCore.__module__ == "evomemory.context.bridge"
+    assert MempalaceBackend.__module__ == "evomemory.context.bridge"
+    assert classify_memory_tier.__module__ == "evomemory.domain.memory_policy"
+    assert (
+        SessionStateStore.__module__ == "evomemory.infrastructure.state.session_state"
+    )
+    assert create_app.__module__ == "evomemory.interfaces.mcp.server"

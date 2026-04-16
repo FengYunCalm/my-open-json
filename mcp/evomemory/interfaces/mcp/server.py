@@ -8,34 +8,34 @@ from mcp.server.fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from mempalace_bridge_core import BridgeConfig, BridgeCore
+from evomemory.context.bridge import BridgeConfig, BridgeCore
 
 
 def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
     server = FastMCP("mempalace", streamable_http_path="/mcp", stateless_http=True)
 
-    @server.tool(name="mempalace_status")
-    def mempalace_status() -> dict[str, Any]:
+    @server.tool(name="evomemory_context_status")
+    def evomemory_context_status() -> dict[str, Any]:
         return core.mcp_status()
 
-    @server.tool(name="mempalace_list_wings")
-    def mempalace_list_wings() -> dict[str, Any]:
+    @server.tool(name="evomemory_list_wings")
+    def evomemory_list_wings() -> dict[str, Any]:
         return core.mcp_list_wings()
 
-    @server.tool(name="mempalace_list_rooms")
-    def mempalace_list_rooms(wing: str | None = None) -> dict[str, Any]:
+    @server.tool(name="evomemory_list_rooms")
+    def evomemory_list_rooms(wing: str | None = None) -> dict[str, Any]:
         return core.mcp_list_rooms(wing=wing)
 
-    @server.tool(name="mempalace_get_taxonomy")
-    def mempalace_get_taxonomy() -> dict[str, Any]:
+    @server.tool(name="evomemory_get_taxonomy")
+    def evomemory_get_taxonomy() -> dict[str, Any]:
         return core.mcp_get_taxonomy()
 
-    @server.tool(name="mempalace_get_drawer")
-    def mempalace_get_drawer(drawer_id: str) -> dict[str, Any]:
+    @server.tool(name="evomemory_get_drawer")
+    def evomemory_get_drawer(drawer_id: str) -> dict[str, Any]:
         return core.mcp_get_drawer(drawer_id)
 
-    @server.tool(name="mempalace_search")
-    def mempalace_search(
+    @server.tool(name="evomemory_search_drawers")
+    def evomemory_search_drawers(
         query: str,
         limit: int = 5,
         wing: str | None = None,
@@ -54,8 +54,8 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
             room=room,
         )
 
-    @server.tool(name="mempalace_list_drawers")
-    def mempalace_list_drawers(
+    @server.tool(name="evomemory_list_drawers")
+    def evomemory_list_drawers(
         wing: str | None = None,
         room: str | None = None,
         session_id: str | None = None,
@@ -80,8 +80,8 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
             offset=offset,
         )
 
-    @server.tool(name="mempalace_list_sessions")
-    def mempalace_list_sessions(
+    @server.tool(name="evomemory_list_sessions")
+    def evomemory_list_sessions(
         wing: str | None = None,
         room: str | None = None,
         limit: int = 20,
@@ -89,8 +89,8 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
     ) -> dict[str, Any]:
         return core.mcp_list_sessions(wing=wing, room=room, limit=limit, offset=offset)
 
-    @server.tool(name="mempalace_get_session_messages")
-    def mempalace_get_session_messages(
+    @server.tool(name="evomemory_get_session_messages")
+    def evomemory_get_session_messages(
         session_id: str,
         memory_tier: str | None = None,
         current_only: bool = False,
@@ -109,11 +109,117 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
             offset=offset,
         )
 
-    @server.tool(name="mempalace_kg_query")
-    def mempalace_kg_query(
+    @server.tool(name="evomemory_query_graph")
+    def evomemory_query_graph(
         entity: str, as_of: str | None = None, direction: str = "both"
     ) -> dict[str, Any]:
         return core.mcp_kg_query(entity=entity, as_of=as_of, direction=direction)
+
+    @server.tool(name="evomemory_status")
+    def evomemory_status() -> dict[str, Any]:
+        return core.evomemory_status()
+
+    @server.tool(name="evomemory_search_context")
+    def evomemory_search_context(
+        query: str,
+        directory: str,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        return core.search_context(query, directory, session_id=session_id)
+
+    @server.tool(name="evomemory_query_beliefs")
+    def evomemory_query_beliefs(
+        scope: str | None = None,
+        key: str | None = None,
+        current_only: bool = False,
+        historical_only: bool = False,
+        min_confidence: float | None = None,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        return core.evomemory_query_beliefs(
+            scope=scope,
+            key=key,
+            current_only=current_only,
+            historical_only=historical_only,
+            min_confidence=min_confidence,
+            limit=limit,
+        )
+
+    @server.tool(name="evomemory_query_genes")
+    def evomemory_query_genes(
+        scope: str | None = None,
+        key: str | None = None,
+        current_only: bool = False,
+        stale_only: bool = False,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        return core.evomemory_query_genes(
+            scope=scope,
+            key=key,
+            current_only=current_only,
+            stale_only=stale_only,
+            limit=limit,
+        )
+
+    @server.tool(name="evomemory_query_capsules")
+    def evomemory_query_capsules(
+        scope: str | None = None,
+        current_only: bool = False,
+        stale_only: bool = False,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        return core.evomemory_query_capsules(
+            scope=scope,
+            current_only=current_only,
+            stale_only=stale_only,
+            limit=limit,
+        )
+
+    @server.tool(name="evomemory_list_evolution_events")
+    def evomemory_list_evolution_events(limit: int = 20) -> dict[str, Any]:
+        return core.evomemory_list_evolution_events(limit=limit)
+
+    @server.tool(name="evomemory_evaluation_summary")
+    def evomemory_evaluation_summary() -> dict[str, Any]:
+        return core.evomemory_evaluation_summary()
+
+    @server.tool(name="evomemory_list_feedback")
+    def evomemory_list_feedback(
+        target_kind: str | None = None,
+        target_id: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        return core.evomemory_list_feedback(
+            target_kind=target_kind,
+            target_id=target_id,
+            limit=limit,
+        )
+
+    @server.tool(name="evomemory_record_feedback")
+    def evomemory_record_feedback(
+        target_kind: str,
+        target_id: str,
+        signal: str,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        return core.evomemory_record_feedback(
+            target_kind=target_kind,
+            target_id=target_id,
+            signal=signal,
+            note=note,
+        )
+
+    @server.tool(name="evomemory_run_revision")
+    def evomemory_run_revision(min_confidence: float = 0.5) -> dict[str, Any]:
+        return core.evomemory_run_revision(min_confidence=min_confidence)
+
+    @server.tool(name="evomemory_export_snapshot")
+    def evomemory_export_snapshot(limit: int = 20) -> dict[str, Any]:
+        return core.evomemory_export_snapshot(limit=limit)
+
+    @server.tool(name="evomemory_run_benchmark")
+    def evomemory_run_benchmark(limit: int = 20) -> dict[str, Any]:
+        return core.evomemory_run_benchmark(limit=limit)
 
     @server.custom_route("/health", methods=["GET"], include_in_schema=False)
     async def health_route(_request: Request):
@@ -200,3 +306,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+__all__ = ["create_app", "create_mcp_server", "main", "parse_args"]

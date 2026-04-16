@@ -129,3 +129,6 @@ class SessionStateStore:
             "session_count": int(session_count or 0),
             "last_saved_at": last_saved_at,
         }
+
+
+__all__ = ["SessionStateStore"]

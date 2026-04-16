@@ -7,8 +7,8 @@ import {
   collectText,
   messagesSinceCheckpoint,
   shouldSearch,
-} from './mempalace-opencode.helpers.mjs'
-import { ensureBridge } from './mempalace-bridge-manager.mjs'
+} from './evomemory-opencode.helpers.mjs'
+import { ensureBridge } from './evomemory-bridge-manager.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -23,7 +23,7 @@ const DEFAULTS = {
 }
 
 function loadConfig() {
-  const file = path.join(__dirname, 'mempalace-opencode.config.json')
+  const file = path.join(__dirname, 'evomemory-opencode.config.json')
   if (!fs.existsSync(file)) return { ...DEFAULTS }
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'))
@@ -35,7 +35,7 @@ function loadConfig() {
 
 async function log(client, level, message, extra = undefined) {
   await client?.app?.log?.({
-    body: { service: 'mempalace-opencode', level, message, extra },
+    body: { service: 'evomemory-opencode', level, message, extra },
   }).catch(() => {})
 }
 
@@ -57,7 +57,7 @@ async function getMessages(client, sessionID) {
   return result.data ?? []
 }
 
-export const MempalaceOpencodePlugin = async ({ client, directory, worktree }) => {
+export const EvomemoryOpencodePlugin = async ({ client, directory, worktree }) => {
   const config = loadConfig()
   const sessions = new Map()
 
@@ -171,3 +171,5 @@ export const MempalaceOpencodePlugin = async ({ client, directory, worktree }) =
     },
   }
 }
+
+export const MempalaceOpencodePlugin = EvomemoryOpencodePlugin

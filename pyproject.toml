@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evomemory"
+version = "0.1.0"
+description = "Unified memory and evolution stack for OpenCode."
+readme = "mcp/evomemory/README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "mcp>=1.13.1",
+  "starlette>=0.47.0",
+  "uvicorn>=0.35.0",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8.3",
+]
+
+[tool.setuptools]
+package-dir = {"" = "mcp"}
+
+[tool.setuptools.packages.find]
+where = ["mcp"]
+include = ["evomemory*"]
+
+[tool.pytest.ini_options]
+testpaths = ["mcp/tests"]
+pythonpath = ["mcp"]
+addopts = "-q"

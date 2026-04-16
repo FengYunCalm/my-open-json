@@ -1,4 +1,4 @@
-import { buildDirectBridgeLaunch } from './mempalace-opencode.helpers.mjs'
+import { buildDirectBridgeLaunch } from './evomemory-opencode.helpers.mjs'
 
 const healthCache = new Map()
 
@@ -18,7 +18,7 @@ function getNow(now) {
 
 async function defaultLog(client, level, message, extra = undefined) {
   await client?.app?.log?.({
-    body: { service: 'mempalace-opencode', level, message, extra },
+    body: { service: 'evomemory-opencode', level, message, extra },
   }).catch(() => {})
 }
 
@@ -103,7 +103,7 @@ async function startDirectBridge(config, client, dependencies = {}) {
         ...launch.env,
       },
     })
-    await logImpl(client, 'info', 'Started MemPalace bridge via direct fallback')
+    await logImpl(client, 'info', 'Started EvoMemory bridge via direct fallback')
     return true
   } catch (error) {
     await logImpl(client, 'warn', 'Failed to run direct bridge fallback', { error: String(error) })
@@ -118,6 +118,6 @@ export async function ensureBridge(config, client, dependencies = {}) {
   const startedDirectly = await startDirectBridge(config, client, dependencies)
   if (startedDirectly && (await waitForBridge(config, dependencies))) return true
   const logImpl = dependencies.logImpl ?? defaultLog
-  await logImpl(client, 'warn', 'MemPalace bridge is unavailable after startup attempt')
+  await logImpl(client, 'warn', 'EvoMemory bridge is unavailable after startup attempt')
   return false
 }
