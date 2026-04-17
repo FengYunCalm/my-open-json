@@ -4,6 +4,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 
+AUTO_REVISION_MIN_CONFIDENCE = 0.7
+
+
 class SessionLifecycleService:
     def __init__(self, core: Any):
         self.core = core
@@ -145,6 +148,46 @@ class SessionLifecycleService:
         self.core.runtime["last_flush_at"] = session["last_saved_at"]
         self.core._save_state(state)
         self.core._compact_working_session(session_id, session)
+        maintenance: dict[str, Any] | None = None
+        if reason == "compact":
+            pending_revision = (
+                self.core.belief_service.has_low_confidence_current_facts(
+                    min_confidence=AUTO_REVISION_MIN_CONFIDENCE
+                )
+            )
+            if pending_revision:
+                revision = self.core.evomemory_run_revision(
+                    min_confidence=AUTO_REVISION_MIN_CONFIDENCE
+                )
+                maintenance = maintenance or {}
+                maintenance["revision"] = {
+                    "revised_count": revision["revised_count"],
+                    "reconciled_gene_count": revision["reconciled_gene_count"],
+                    "reconciled_capsule_count": revision["reconciled_capsule_count"],
+                }
+            stale_belief_ids = list(
+                dict.fromkeys(
+                    item.get("belief_id")
+                    for item in self.core.belief_service.stale_source_records()
+                    if item.get("belief_id")
+                )
+            )
+            reconcile_preview = (
+                self.core.governance_service.preview_reconcile_stale_assets(
+                    stale_belief_ids
+                )
+            )
+            if reconcile_preview.get("genes") or reconcile_preview.get("capsules"):
+                reconcile = self.core._reconcile_governance_assets(
+                    stale_belief_ids,
+                    rationale="reconciled stale governance asset during compact maintenance",
+                    record_empty=False,
+                )
+                maintenance = maintenance or {}
+                maintenance["reconcile"] = {
+                    "reconciled_gene_count": reconcile["reconciled_gene_count"],
+                    "reconciled_capsule_count": reconcile["reconciled_capsule_count"],
+                }
         return {
             "session_id": session_id,
             "directory": session["directory"],
@@ -153,6 +196,7 @@ class SessionLifecycleService:
             "saved_drawer_ids": [item["drawer_id"] for item in saved],
             "last_saved_message_id": session.get("last_saved_message_id"),
             "reason": reason,
+            "maintenance": maintenance,
         }
 
     def compact_session(

@@ -323,6 +323,13 @@ class BeliefPlaneService:
             for item in rows
         ]
 
+    def has_low_confidence_current_facts(self, *, min_confidence: float) -> bool:
+        return any(
+            not item.get("valid_to")
+            and float(item.get("confidence") or 0) < float(min_confidence)
+            for item in self._fetch_rows()
+        )
+
     def apply_feedback(
         self,
         *,

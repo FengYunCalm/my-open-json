@@ -173,6 +173,31 @@ class GovernancePlaneService:
             ),
         }
 
+    def preview_reconcile_stale_assets(self, stale_belief_ids: list[str]) -> dict:
+        stale_belief_id_set = set(stale_belief_ids)
+        if not stale_belief_id_set:
+            return {"genes": [], "capsules": []}
+
+        genes = [
+            item
+            for item in self._fetch_genes()
+            if item.get("source_fact_id") in stale_belief_id_set
+            and not item.get("is_stale")
+        ]
+        candidate_gene_ids = {
+            item.get("id")
+            for item in self._fetch_genes()
+            if item.get("source_fact_id") in stale_belief_id_set and item.get("id")
+        }
+        capsules = [
+            item
+            for item in self._fetch_capsules()
+            if item.get("gene_ids")
+            and not item.get("is_stale")
+            and set(item.get("gene_ids", [])).issubset(candidate_gene_ids)
+        ]
+        return {"genes": genes, "capsules": capsules}
+
     def list_genes(
         self,
         *,

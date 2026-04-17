@@ -1611,10 +1611,32 @@ class BridgeCore:
         }
 
     def _reconcile_governance_assets(
-        self, stale_belief_ids: list[str], *, rationale: str
+        self,
+        stale_belief_ids: list[str],
+        *,
+        rationale: str,
+        record_empty: bool = True,
     ) -> dict[str, Any]:
+        if not stale_belief_ids:
+            return {
+                "stale_belief_count": 0,
+                "reconciled_gene_count": 0,
+                "reconciled_capsule_count": 0,
+                "genes": [],
+                "capsules": [],
+            }
         reconcile_at = datetime.now(timezone.utc).isoformat()
         reconciled = self.governance_service.reconcile_stale_assets(stale_belief_ids)
+        reconciled_gene_count = len(reconciled.get("genes", []))
+        reconciled_capsule_count = len(reconciled.get("capsules", []))
+        if not record_empty and not (reconciled_gene_count or reconciled_capsule_count):
+            return {
+                "stale_belief_count": len(stale_belief_ids),
+                "reconciled_gene_count": 0,
+                "reconciled_capsule_count": 0,
+                "genes": [],
+                "capsules": [],
+            }
         for gene in reconciled.get("genes", []):
             self.evaluation_service.increment("reconciled_stale_genes")
             self.governance_service.record_event(
@@ -1634,14 +1656,12 @@ class BridgeCore:
         self.evaluation_service.increment("reconcile_runs")
         self.runtime["last_reconcile_at"] = reconcile_at
         self.runtime["last_reconcile_stale_belief_count"] = len(stale_belief_ids)
-        self.runtime["last_reconcile_gene_count"] = len(reconciled.get("genes", []))
-        self.runtime["last_reconcile_capsule_count"] = len(
-            reconciled.get("capsules", [])
-        )
+        self.runtime["last_reconcile_gene_count"] = reconciled_gene_count
+        self.runtime["last_reconcile_capsule_count"] = reconciled_capsule_count
         return {
             "stale_belief_count": len(stale_belief_ids),
-            "reconciled_gene_count": len(reconciled.get("genes", [])),
-            "reconciled_capsule_count": len(reconciled.get("capsules", [])),
+            "reconciled_gene_count": reconciled_gene_count,
+            "reconciled_capsule_count": reconciled_capsule_count,
             "genes": reconciled.get("genes", []),
             "capsules": reconciled.get("capsules", []),
         }

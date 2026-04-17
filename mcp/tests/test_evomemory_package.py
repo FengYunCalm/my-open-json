@@ -1489,6 +1489,170 @@ def test_revision_reconciles_historical_stale_governance_assets():
     assert any(item["id"] == capsule_id for item in stale_capsules["capsules"])
 
 
+def test_compact_flush_triggers_revision_maintenance_for_low_confidence_beliefs():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-auto-maintenance-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+    core.start_session("ses_auto_maintenance", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_auto_maintenance",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_auto_maintenance_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            }
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_auto_maintenance",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_auto_maintenance_2", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            }
+        ],
+        reason="idle",
+    )
+
+    belief = core.evomemory_query_beliefs(
+        scope="user", key="response_language", current_only=True, limit=10
+    )["facts"][0]
+    core.evomemory_record_feedback(
+        target_kind="belief",
+        target_id=belief["id"],
+        signal="correct",
+        note="This belief should be revised.",
+    )
+    before_revision_runs = core.evomemory_evaluation_summary()["metrics"].get(
+        "revision_runs", 0
+    )
+
+    result = core.flush_session(
+        "ses_auto_maintenance",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_auto_maintenance_3", "role": "assistant"},
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "我已经确认当前会话需要在空闲后自动维护。",
+                    }
+                ],
+            }
+        ],
+        reason="compact",
+    )
+
+    current_beliefs = core.evomemory_query_beliefs(
+        scope="user", key="response_language", current_only=True, limit=10
+    )
+    historical_beliefs = core.evomemory_query_beliefs(
+        scope="user", key="response_language", historical_only=True, limit=10
+    )
+    summary = core.evomemory_evaluation_summary()
+
+    assert result["saved"] == 1
+    assert summary["metrics"]["revision_runs"] == before_revision_runs + 1
+    assert current_beliefs["count"] == 0
+    assert historical_beliefs["count"] == 1
+    assert summary["maintenance_summary"]["last_revision_at"] is not None
+    assert summary["maintenance_summary"]["last_revision_revised_count"] == 1
+
+
+def test_compact_flush_reconciles_stale_governance_assets():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+    import sqlite3
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-auto-reconcile-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+    core.start_session("ses_auto_reconcile", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_auto_reconcile",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_auto_reconcile_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            }
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_auto_reconcile",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_auto_reconcile_2", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            }
+        ],
+        reason="idle",
+    )
+
+    belief = core.evomemory_query_beliefs(
+        scope="user", key="response_language", current_only=True, limit=10
+    )["facts"][0]
+    core.evomemory_record_feedback(
+        target_kind="belief",
+        target_id=belief["id"],
+        signal="correct",
+        note="This belief should be revised.",
+    )
+    revision = core.evomemory_run_revision(min_confidence=0.7)
+    gene_id = revision["demoted_genes"][0]["id"]
+    capsule_id = revision["demoted_capsules"][0]["id"]
+    with sqlite3.connect(state_path) as connection:
+        connection.execute(
+            "UPDATE genes SET is_stale = 0, demoted_at = NULL WHERE id = ?",
+            (gene_id,),
+        )
+        connection.execute(
+            "UPDATE capsules SET is_stale = 0, demoted_at = NULL WHERE id = ?",
+            (capsule_id,),
+        )
+    before_reconcile_runs = core.evomemory_evaluation_summary()["metrics"].get(
+        "reconcile_runs", 0
+    )
+
+    result = core.flush_session(
+        "ses_auto_reconcile",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_auto_reconcile_3", "role": "assistant"},
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "我已经确认治理资产需要在 compact 时自动校正。",
+                    }
+                ],
+            }
+        ],
+        reason="compact",
+    )
+
+    stale_genes = core.evomemory_query_genes(scope="user", stale_only=True, limit=10)
+    stale_capsules = core.evomemory_query_capsules(
+        scope="user", stale_only=True, limit=10
+    )
+    summary = core.evomemory_evaluation_summary()
+
+    assert result["saved"] == 1
+    assert summary["metrics"].get("reconcile_runs", 0) == before_reconcile_runs + 1
+    assert any(item["id"] == gene_id for item in stale_genes["genes"])
+    assert any(item["id"] == capsule_id for item in stale_capsules["capsules"])
+    assert summary["maintenance_summary"]["last_reconcile_at"] is not None
+    assert summary["maintenance_summary"]["last_reconcile_gene_count"] == 1
+    assert summary["maintenance_summary"]["last_reconcile_capsule_count"] == 1
+
+
 def test_evaluation_summary_includes_maintenance_snapshot():
     from evomemory.context.bridge import BridgeCore, BridgeConfig
 
