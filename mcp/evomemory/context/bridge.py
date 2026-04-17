@@ -71,6 +71,7 @@ EVOMEMORY_HOME_DIRNAME = ".evomemory"
 EVOMEMORY_PALACE_ENV = "EVOMEMORY_PALACE_PATH"
 EVOMEMORY_COLLECTION_NAME = "evomemory_drawers"
 EVOMEMORY_STATE_FILENAME = "evomemory_bridge_state.sqlite3"
+GLOBAL_MEMORY_WING = "global-memory"
 
 
 def _default_runtime_state() -> dict[str, Any]:
@@ -1207,7 +1208,7 @@ class BridgeCore:
             tiers.append(("session", {"session_id": session_id}))
         tiers.append(("directory", {"directory": directory}))
         tiers.append(("wing", {"wing": wing}))
-        tiers.append(("global", {}))
+        tiers.append(("global", {"wing": GLOBAL_MEMORY_WING}))
 
         seen = set()
         results = []

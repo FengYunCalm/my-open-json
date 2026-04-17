@@ -1737,6 +1737,51 @@ def test_search_context_prioritizes_session_directory_wing_then_global():
     assert "[session]" in result["system_block"]
 
 
+def test_search_context_global_fallback_excludes_other_regular_wings():
+    core, backend = make_core()
+
+    backend.save_entry(
+        wing="XiaKeXing",
+        room="opencode-session",
+        content="Assistant:\nCross-wing git commit result that should stay isolated",
+        source_file="session:ses_xiake",
+        metadata={
+            "directory": "/home/mechrevo/projects/XiaKeXing",
+            "session_id": "ses_xiake",
+            "message_id": "msg_cross_wing",
+            "role": "assistant",
+            "memory_tier": "working_session",
+            "valid_from": "2026-04-13T11:00:00+00:00",
+        },
+    )
+    backend.save_entry(
+        wing="global-memory",
+        room="cross-project",
+        content="Assistant:\nGlobal git commit fallback that should remain visible",
+        source_file="session:ses_global_git",
+        metadata={
+            "directory": "/home/mechrevo/shared",
+            "session_id": "ses_global_git",
+            "message_id": "msg_global_git",
+            "role": "assistant",
+            "memory_tier": "working_session",
+            "valid_from": "2026-04-13T11:01:00+00:00",
+        },
+    )
+
+    result = core.search_context(
+        "git commit",
+        "/home/mechrevo/.config/opencode",
+        session_id="ses_demo",
+    )
+
+    assert "drawer_msg_global_git" in [item["drawer_id"] for item in result["results"]]
+    assert "drawer_msg_cross_wing" not in [
+        item["drawer_id"] for item in result["results"]
+    ]
+    assert all(item["wing"] != "XiaKeXing" for item in result["results"])
+
+
 def test_search_context_limits_core_memory_to_configured_count():
     core, _backend = make_core(core_memory_limit=2)
 
