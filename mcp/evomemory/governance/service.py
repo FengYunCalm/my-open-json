@@ -159,6 +159,14 @@ class GovernancePlaneService:
             for row in rows
         ]
 
+    def _active_gene_ids(self, gene_ids: list[str]) -> list[str]:
+        active_ids = {
+            item.get("id")
+            for item in self._fetch_genes()
+            if item.get("id") and not item.get("is_stale")
+        }
+        return [gene_id for gene_id in gene_ids if gene_id in active_ids]
+
     def status(self) -> dict:
         return {
             "plane": "governance",
@@ -226,7 +234,17 @@ class GovernancePlaneService:
         stale_only: bool = False,
         limit: int = 10,
     ) -> dict:
-        capsules = self._fetch_capsules()
+        capsules = []
+        for item in self._fetch_capsules():
+            if item.get("is_stale"):
+                capsules.append(item)
+                continue
+            capsules.append(
+                {
+                    **item,
+                    "gene_ids": self._active_gene_ids(item.get("gene_ids", [])),
+                }
+            )
         if scope is not None:
             capsules = [item for item in capsules if item.get("scope") == scope]
         if current_only:
@@ -244,7 +262,25 @@ class GovernancePlaneService:
             (item for item in self._fetch_genes() if item.get("id") == gene_id), None
         )
         if existing is not None:
-            return {"created": False, "gene": existing}
+            gene = {
+                **existing,
+                "summary": f"Respect {scope} belief {key}={value}",
+                "source_fact_id": fact.get("id"),
+                "is_stale": False,
+                "demoted_at": None,
+            }
+            if self.path is None:
+                for index, item in enumerate(self._genes):
+                    if item.get("id") == gene_id:
+                        self._genes[index] = gene
+                        break
+            else:
+                with self._connect() as connection:
+                    connection.execute(
+                        "UPDATE genes SET summary = ?, source_fact_id = ?, is_stale = 0, demoted_at = NULL WHERE id = ?",
+                        (gene["summary"], gene["source_fact_id"], gene_id),
+                    )
+            return {"created": False, "gene": gene}
         gene = {
             "id": gene_id,
             "scope": scope,
@@ -315,15 +351,15 @@ class GovernancePlaneService:
                     )
             return {"created": True, "capsule": capsule}
 
-        if gene_id in existing.get("gene_ids", []):
-            return {"created": False, "capsule": existing}
-
-        updated_gene_ids = [*existing.get("gene_ids", []), gene_id]
+        updated_gene_ids = self._active_gene_ids(existing.get("gene_ids", []))
+        if gene_id not in updated_gene_ids:
+            updated_gene_ids.append(gene_id)
         capsule = {
             **existing,
             "gene_ids": updated_gene_ids,
             "updated_at": updated_at,
             "is_stale": False,
+            "demoted_at": None,
         }
         if self.path is None:
             for index, item in enumerate(self._capsules):
@@ -333,7 +369,7 @@ class GovernancePlaneService:
         else:
             with self._connect() as connection:
                 connection.execute(
-                    "UPDATE capsules SET gene_ids_json = ?, updated_at = ?, is_stale = 0 WHERE id = ?",
+                    "UPDATE capsules SET gene_ids_json = ?, updated_at = ?, is_stale = 0, demoted_at = NULL WHERE id = ?",
                     (json.dumps(updated_gene_ids), updated_at, capsule_id),
                 )
         return {"created": False, "capsule": capsule}
@@ -346,24 +382,26 @@ class GovernancePlaneService:
                 if gene.get("id") in set(gene_ids):
                     gene["score"] = int(gene.get("score") or 0) + 1
                     gene["is_stale"] = False
+                    gene["demoted_at"] = None
                     gene_updates += 1
             for capsule in self._capsules:
                 if capsule.get("id") in set(capsule_ids):
                     capsule["score"] = int(capsule.get("score") or 0) + 1
                     capsule["is_stale"] = False
+                    capsule["demoted_at"] = None
                     capsule_updates += 1
             return {"gene_updates": gene_updates, "capsule_updates": capsule_updates}
 
         with self._connect() as connection:
             for gene_id in gene_ids:
                 result = connection.execute(
-                    "UPDATE genes SET score = score + 1, is_stale = 0 WHERE id = ?",
+                    "UPDATE genes SET score = score + 1, is_stale = 0, demoted_at = NULL WHERE id = ?",
                     (gene_id,),
                 )
                 gene_updates += int(result.rowcount or 0)
             for capsule_id in capsule_ids:
                 result = connection.execute(
-                    "UPDATE capsules SET score = score + 1, is_stale = 0 WHERE id = ?",
+                    "UPDATE capsules SET score = score + 1, is_stale = 0, demoted_at = NULL WHERE id = ?",
                     (capsule_id,),
                 )
                 capsule_updates += int(result.rowcount or 0)

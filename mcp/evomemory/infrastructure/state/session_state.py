@@ -31,6 +31,14 @@ class SessionStateStore:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS runtime_state (
+                    key TEXT PRIMARY KEY,
+                    value_json TEXT
+                )
+                """
+            )
 
     def _migrate_legacy_json_if_needed(self) -> None:
         if not self.path.exists():
@@ -65,6 +73,9 @@ class SessionStateStore:
                 ORDER BY session_id
                 """
             ).fetchall()
+            runtime_rows = connection.execute(
+                "SELECT key, value_json FROM runtime_state ORDER BY key"
+            ).fetchall()
 
         sessions = {}
         for row in rows:
@@ -85,12 +96,17 @@ class SessionStateStore:
                 "last_saved_order": int(last_saved_order or 0),
                 "last_saved_at": last_saved_at,
             }
-        return {"sessions": sessions}
+        runtime = {}
+        for key, value_json in runtime_rows:
+            runtime[key] = json.loads(value_json)
+        return {"sessions": sessions, "runtime": runtime}
 
     def save(self, state: dict[str, Any]) -> None:
         sessions = state.get("sessions", {})
+        runtime = state.get("runtime", {})
         with self._connect() as connection:
             connection.execute("DELETE FROM session_state")
+            connection.execute("DELETE FROM runtime_state")
             connection.executemany(
                 """
                 INSERT INTO session_state (
@@ -115,6 +131,10 @@ class SessionStateStore:
                     )
                     for session_id, payload in sessions.items()
                 ],
+            )
+            connection.executemany(
+                "INSERT INTO runtime_state (key, value_json) VALUES (?, ?)",
+                [(key, json.dumps(value)) for key, value in runtime.items()],
             )
 
     def summary(self) -> dict[str, Any]:

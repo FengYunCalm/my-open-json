@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -230,6 +231,12 @@ def test_bridge_core_exposes_evomemory_unified_query_surface():
     status = core.evomemory_status()
     assert status["service"] == "evomemory"
     assert status["context"]["service"] == "evomemory-bridge"
+    assert status["context"]["budget_policy"] == {
+        "max_block_chars": 2000,
+        "runtime_overlay_reserved_chars": 96,
+        "runtime_base_min_chars": 80,
+    }
+    assert status["context"]["budget_policy_diff"] == {}
     assert status["belief"]["plane"] == "belief"
     assert status["governance"]["plane"] == "governance"
     assert status["maintenance_summary"]["plane"] == "maintenance"
@@ -399,6 +406,12 @@ def test_flush_session_requires_reaffirmation_before_promoting_memories_into_bel
     assert capsules["count"] == 2
     assert {item["scope"] for item in capsules["capsules"]} >= {"user", "project"}
     assert status["belief"]["fact_count"] == 2
+    assert status["context"]["budget_policy"] == {
+        "max_block_chars": 2000,
+        "runtime_overlay_reserved_chars": 96,
+        "runtime_base_min_chars": 80,
+    }
+    assert status["context"]["budget_policy_diff"] == {}
 
 
 def test_reaffirming_current_belief_updates_metadata_without_creating_new_fact():
@@ -449,6 +462,51 @@ def test_reaffirming_current_belief_updates_metadata_without_creating_new_fact()
     assert beliefs["facts"][0]["source_count"] == 2
     assert beliefs["facts"][0]["last_confirmed_at"] is not None
     assert beliefs["facts"][0]["confidence"] > 0.6
+
+
+def test_unstructured_user_preference_candidates_fall_back_to_working_session():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-unstructured-preference-"))
+    core = BridgeCore(
+        BridgeConfig(state_path=temp_dir / "state.sqlite3"), backend=PromotionBackend()
+    )
+    core.start_session("ses_unstructured_preference", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_unstructured_preference",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_unstructured_preference", "role": "user"},
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "就用你默认的稳方案，现在开始plan最终可执行方案",
+                    }
+                ],
+            }
+        ],
+        reason="idle",
+    )
+
+    user_preferences = core.mcp_list_drawers(
+        memory_tier="user_preference",
+        current_only=True,
+        session_id="ses_unstructured_preference",
+        role="user",
+        limit=10,
+    )
+    session_messages = core.mcp_get_session_messages(
+        "ses_unstructured_preference",
+        current_only=True,
+        role="user",
+        limit=10,
+    )
+
+    assert user_preferences["count"] == 0
+    assert session_messages["count"] == 1
+    assert session_messages["messages"][0]["memory_tier"] == "working_session"
+    assert session_messages["messages"][0]["memory_key"] is None
 
 
 def test_belief_query_supports_min_confidence_filter():
@@ -866,6 +924,304 @@ def test_search_context_prioritizes_higher_score_governance_assets_in_runtime_ov
     assert "gene[user] response_language=zh-cn" in result["system_block"]
 
 
+def test_runtime_overlay_system_block_respects_budget_for_belief_memory():
+    from evomemory.runtime.orchestrator import RuntimeOrchestrator
+
+    orchestrator = RuntimeOrchestrator(
+        SimpleNamespace(config=SimpleNamespace(max_block_chars=90))
+    )
+
+    result = orchestrator._augment_system_block(
+        "Base system block",
+        [
+            {
+                "scope": "project",
+                "key": "code_change_permission",
+                "value": "confirm_first",
+            },
+            {"scope": "user", "key": "response_language", "value": "zh-cn"},
+        ],
+        {"genes": [], "capsules": []},
+    )
+
+    assert len(result) <= 90
+    assert "Belief memory:" in result
+    assert "1. [project] code_change_permission=confirm_first" in result
+    assert "2. [user] response_language=zh-cn" not in result
+
+
+def test_runtime_overlay_system_block_respects_budget_for_governance_assets():
+    from evomemory.runtime.orchestrator import RuntimeOrchestrator
+
+    orchestrator = RuntimeOrchestrator(
+        SimpleNamespace(config=SimpleNamespace(max_block_chars=80))
+    )
+
+    result = orchestrator._augment_system_block(
+        "Base system block",
+        [],
+        {
+            "genes": [
+                {"scope": "user", "key": "response_language", "value": "zh-cn"},
+                {
+                    "scope": "project",
+                    "key": "git_commit_behavior",
+                    "value": "disabled",
+                },
+            ],
+            "capsules": [{"scope": "project", "gene_ids": ["gene_a", "gene_b"]}],
+        },
+    )
+
+    assert len(result) <= 80
+    assert "Governance assets:" in result
+    assert "- gene[user] response_language=zh-cn" in result
+    assert "- gene[project] git_commit_behavior=disabled" not in result
+    assert "- capsule[project] genes=gene_a,gene_b" not in result
+
+
+def test_runtime_overlay_can_trim_base_block_to_keep_top_belief():
+    from evomemory.runtime.orchestrator import RuntimeOrchestrator
+
+    orchestrator = RuntimeOrchestrator(
+        SimpleNamespace(config=SimpleNamespace(max_block_chars=220))
+    )
+
+    result = orchestrator._augment_system_block(
+        "   ... 2 more core memories omitted\n\n"
+        "   ... 1 more context memories omitted\n\n"
+        "EvoMemory context for wing 'opencode':\n"
+        "1. [1.00][session] drawer=drawer_m1 room=opencode-session role=user src=session:ses\n"
+        "   User: 以后都用中文回复",
+        [
+            {
+                "scope": "project",
+                "key": "git_commit_behavior",
+                "value": "disabled",
+            },
+            {"scope": "user", "key": "response_language", "value": "zh-cn"},
+        ],
+        {
+            "genes": [
+                {
+                    "scope": "project",
+                    "key": "git_commit_behavior",
+                    "value": "disabled",
+                }
+            ],
+            "capsules": [],
+        },
+    )
+
+    assert len(result) <= 220
+    assert "Belief memory:" in result
+    assert "1. [project] git_commit_behavior=disabled" in result
+    assert "- gene[project] git_commit_behavior=disabled" not in result
+    assert "User: 以后都用中文回复" not in result
+
+
+def test_search_context_reserves_budget_for_top_belief_overlay_when_base_block_is_near_limit():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-runtime-budget-balance-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(
+        BridgeConfig(
+            state_path=state_path,
+            max_block_chars=220,
+            core_memory_limit=0,
+            search_limit=1,
+        ),
+        backend=PromotionBackend(),
+    )
+    core.start_session("ses_runtime_budget_balance", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_runtime_budget_balance",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_budget_balance_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_budget_balance_2", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                ],
+            },
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_runtime_budget_balance",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_budget_balance_3", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_budget_balance_4", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里还是不要自动提交 git commit"}
+                ],
+            },
+        ],
+        reason="idle",
+    )
+
+    result = core.search_context(
+        "git commit",
+        "/home/mechrevo/.config/opencode",
+        session_id="ses_runtime_budget_balance",
+    )
+    snapshot = core.evomemory_export_snapshot(limit=10)
+
+    assert len(result["system_block"]) <= 220
+    assert "Belief memory:" in result["system_block"]
+    assert "1. [project] git_commit_behavior=disabled" in result["system_block"]
+    assert snapshot["runtime_context"]["displayed_belief_keys"]
+    assert snapshot["runtime_context"]["displayed_belief_keys"][0] == (
+        "git_commit_behavior"
+    )
+    assert snapshot["runtime_context"]["displayed_governance_gene_keys"] == []
+
+
+def test_search_context_overlay_reserve_zero_keeps_minimal_budget_behavior():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-runtime-budget-zero-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(
+        BridgeConfig(
+            state_path=state_path,
+            max_block_chars=220,
+            core_memory_limit=0,
+            search_limit=1,
+            runtime_overlay_reserved_chars=0,
+            runtime_base_min_chars=80,
+        ),
+        backend=PromotionBackend(),
+    )
+    core.start_session("ses_runtime_budget_zero", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_runtime_budget_zero",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_budget_zero_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_budget_zero_2", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                ],
+            },
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_runtime_budget_zero",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_budget_zero_3", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_budget_zero_4", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里还是不要自动提交 git commit"}
+                ],
+            },
+        ],
+        reason="idle",
+    )
+
+    core.search_context(
+        "git commit",
+        "/home/mechrevo/.config/opencode",
+        session_id="ses_runtime_budget_zero",
+    )
+    snapshot = core.evomemory_export_snapshot(limit=10)
+
+    assert snapshot["runtime_context"]["displayed_belief_keys"][:1] == [
+        "git_commit_behavior"
+    ]
+    assert snapshot["runtime_context"]["displayed_governance_gene_keys"] == []
+
+
+def test_search_context_overlay_reserve_can_keep_top_governance_visible():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-runtime-budget-governance-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(
+        BridgeConfig(
+            state_path=state_path,
+            max_block_chars=220,
+            core_memory_limit=0,
+            search_limit=1,
+            runtime_overlay_reserved_chars=160,
+            runtime_base_min_chars=0,
+        ),
+        backend=PromotionBackend(),
+    )
+    core.start_session(
+        "ses_runtime_budget_governance", "/home/mechrevo/.config/opencode"
+    )
+    core.flush_session(
+        "ses_runtime_budget_governance",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_budget_governance_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_budget_governance_2", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                ],
+            },
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_runtime_budget_governance",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_budget_governance_3", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_budget_governance_4", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里还是不要自动提交 git commit"}
+                ],
+            },
+        ],
+        reason="idle",
+    )
+
+    result = core.search_context(
+        "git commit",
+        "/home/mechrevo/.config/opencode",
+        session_id="ses_runtime_budget_governance",
+    )
+    snapshot = core.evomemory_export_snapshot(limit=10)
+
+    assert len(result["system_block"]) <= 220
+    assert snapshot["runtime_context"]["displayed_belief_keys"][:1] == [
+        "git_commit_behavior"
+    ]
+    assert snapshot["runtime_context"]["displayed_governance_gene_keys"] == [
+        "git_commit_behavior"
+    ]
+
+
 def test_evaluation_summary_tracks_promotions_supersedes_and_enriched_searches():
     from evomemory.context.bridge import BridgeCore, BridgeConfig
 
@@ -1131,7 +1487,7 @@ def test_export_snapshot_returns_all_planes():
         ],
         reason="idle",
     )
-    core.search_context(
+    result = core.search_context(
         "git commit",
         "/home/mechrevo/.config/opencode",
         session_id="ses_snapshot",
@@ -1148,6 +1504,24 @@ def test_export_snapshot_returns_all_planes():
     assert snapshot["maintenance_summary"]["plane"] == "maintenance"
     assert snapshot["maintenance_summary"]["service"] == "evomemory"
     assert snapshot["feedback"]["count"] == 0
+    assert snapshot["runtime_context"]["system_block_length"] == len(
+        result["system_block"]
+    )
+    assert snapshot["runtime_context"]["system_block_char_limit"] == 2000
+    assert snapshot["runtime_context"]["belief_memory_keys"] == [
+        "git_commit_behavior",
+        "response_language",
+    ]
+    assert snapshot["runtime_context"]["governance_gene_keys"] == [
+        "git_commit_behavior",
+        "response_language",
+    ]
+    assert snapshot["context"]["budget_policy"] == {
+        "max_block_chars": 2000,
+        "runtime_overlay_reserved_chars": 96,
+        "runtime_base_min_chars": 80,
+    }
+    assert snapshot["context"]["budget_policy_diff"] == {}
 
 
 def test_benchmark_runner_scores_snapshot_health():
@@ -1217,6 +1591,9 @@ def test_benchmark_runner_scores_snapshot_health():
     assert benchmark["scenario_checks"]["git_commit_gene_present"] is True
     assert benchmark["scenario_checks"]["project_capsule_present"] is True
     assert benchmark["scenario_checks"]["search_enrichment_active"] is True
+    assert benchmark["scenario_checks"]["runtime_block_within_budget"] is True
+    assert benchmark["scenario_checks"]["runtime_top_belief_retained"] is True
+    assert benchmark["scenario_checks"]["runtime_top_gene_retained"] is True
     assert benchmark["scenario_summary"]["captured_belief_keys"] == [
         "git_commit_behavior",
         "response_language",
@@ -1226,6 +1603,116 @@ def test_benchmark_runner_scores_snapshot_health():
         "response_language",
     ]
     assert benchmark["scenario_summary"]["capsule_scopes"] == ["project", "user"]
+    assert benchmark["scenario_summary"]["runtime_block_length"] > 0
+    assert benchmark["scenario_summary"]["runtime_block_char_limit"] == 2000
+    assert benchmark["scenario_summary"]["runtime_belief_keys"] == [
+        "git_commit_behavior",
+        "response_language",
+    ]
+    assert benchmark["scenario_summary"]["runtime_gene_keys"] == [
+        "git_commit_behavior",
+        "response_language",
+    ]
+    assert (
+        benchmark["scenario_summary"]["top_runtime_belief_key"] == "git_commit_behavior"
+    )
+    assert (
+        benchmark["scenario_summary"]["top_runtime_gene_key"] == "git_commit_behavior"
+    )
+    assert benchmark["scenario_summary"]["budget_policy"] == {
+        "max_block_chars": 2000,
+        "runtime_overlay_reserved_chars": 96,
+        "runtime_base_min_chars": 80,
+    }
+    assert benchmark["scenario_summary"]["budget_policy_diff"] == {}
+
+
+def test_benchmark_runner_detects_runtime_items_dropped_by_small_budget():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    class QueryFilteringBackend(PromotionBackend):
+        def query_drawers(self, **kwargs):
+            rows = super().query_drawers(**kwargs)
+            query = kwargs.get("query")
+            if query is None:
+                return rows
+            return [row for row in rows if query in row.get("text", "")]
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-benchmark-small-budget-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(
+        BridgeConfig(
+            state_path=state_path,
+            max_block_chars=90,
+            core_memory_limit=0,
+            search_limit=1,
+        ),
+        backend=QueryFilteringBackend(),
+    )
+    core.start_session("ses_benchmark_small_budget", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_benchmark_small_budget",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_benchmark_small_budget_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_benchmark_small_budget_2", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                ],
+            },
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_benchmark_small_budget",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_benchmark_small_budget_3", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_benchmark_small_budget_4", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里还是不要自动提交 git commit"}
+                ],
+            },
+        ],
+        reason="idle",
+    )
+
+    result = core.search_context(
+        "zzz-no-match",
+        "/home/mechrevo/.config/opencode",
+        session_id="ses_benchmark_small_budget",
+    )
+    snapshot = core.evomemory_export_snapshot(limit=10)
+    benchmark = core.evomemory_run_benchmark(limit=10)
+
+    assert len(result["system_block"]) <= 90
+    assert snapshot["runtime_context"]["belief_memory_keys"] == [
+        "git_commit_behavior",
+        "response_language",
+    ]
+    assert snapshot["runtime_context"]["displayed_belief_keys"] == [
+        "git_commit_behavior",
+        "response_language",
+    ]
+    assert snapshot["runtime_context"]["displayed_governance_gene_keys"] == []
+    assert benchmark["scenario_checks"]["runtime_block_within_budget"] is True
+    assert benchmark["scenario_checks"]["runtime_top_belief_retained"] is True
+    assert benchmark["scenario_checks"]["runtime_top_gene_retained"] is False
+    assert benchmark["scenario_summary"]["runtime_gene_keys"] == []
+    assert benchmark["scenario_summary"]["budget_policy_diff"] == {
+        "max_block_chars": {"default": 2000, "current": 90, "delta": -1910}
+    }
+    assert (
+        benchmark["scenario_summary"]["top_runtime_gene_key"] == "git_commit_behavior"
+    )
 
 
 def test_belief_feedback_updates_confidence_and_audit_log():
@@ -1641,6 +2128,312 @@ def test_revision_reconciles_historical_stale_governance_assets():
     assert any(item["id"] == capsule_id for item in stale_capsules["capsules"])
 
 
+def test_repromoting_same_value_reactivates_stale_gene_and_capsule():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-reactivate-governance-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+    core.start_session("ses_reactivate_governance", "/home/mechrevo/.config/opencode")
+
+    core.flush_session(
+        "ses_reactivate_governance",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_reactivate_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_reactivate_2", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            },
+        ],
+        reason="idle",
+    )
+
+    belief = core.evomemory_query_beliefs(
+        scope="user", key="response_language", current_only=True, limit=10
+    )["facts"][0]
+    core.evomemory_record_feedback(
+        target_kind="belief",
+        target_id=belief["id"],
+        signal="correct",
+        note="Force this belief below revision threshold.",
+    )
+    core.evomemory_run_revision(min_confidence=0.7)
+
+    assert (
+        core.evomemory_query_genes(scope="user", current_only=True, limit=10)["count"]
+        == 0
+    )
+    assert (
+        core.evomemory_query_capsules(scope="user", current_only=True, limit=10)[
+            "count"
+        ]
+        == 0
+    )
+
+    core.flush_session(
+        "ses_reactivate_governance",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_reactivate_3", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_reactivate_4", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            },
+        ],
+        reason="idle",
+    )
+
+    current_belief = core.evomemory_query_beliefs(
+        scope="user", key="response_language", current_only=True, limit=10
+    )["facts"][0]
+    current_gene = core.evomemory_query_genes(
+        scope="user", current_only=True, limit=10
+    )["genes"][0]
+    current_capsule = core.evomemory_query_capsules(
+        scope="user", current_only=True, limit=10
+    )["capsules"][0]
+
+    assert current_gene["source_fact_id"] == current_belief["id"]
+    assert current_gene["is_stale"] is False
+    assert current_gene["demoted_at"] is None
+    assert current_capsule["is_stale"] is False
+    assert current_capsule["demoted_at"] is None
+    assert current_capsule["gene_ids"] == [current_gene["id"]]
+
+
+def test_current_capsule_hides_stale_gene_ids_after_superseded_belief():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-capsule-current-gene-ids-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+    core.start_session(
+        "ses_capsule_current_gene_ids", "/home/mechrevo/.config/opencode"
+    )
+
+    core.flush_session(
+        "ses_capsule_current_gene_ids",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_capsule_gene_ids_1", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                ],
+            },
+            {
+                "info": {"id": "msg_capsule_gene_ids_2", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里还是不要自动提交 git commit"}
+                ],
+            },
+            {
+                "info": {"id": "msg_capsule_gene_ids_3", "role": "user"},
+                "parts": [{"type": "text", "text": "这个项目里每次都要跑测试"}],
+            },
+            {
+                "info": {"id": "msg_capsule_gene_ids_4", "role": "user"},
+                "parts": [{"type": "text", "text": "这个项目里记得跑测试"}],
+            },
+            {
+                "info": {"id": "msg_capsule_gene_ids_5", "role": "user"},
+                "parts": [{"type": "text", "text": "这个项目里必须 git commit"}],
+            },
+            {
+                "info": {"id": "msg_capsule_gene_ids_6", "role": "user"},
+                "parts": [{"type": "text", "text": "这个项目里必须要 git commit"}],
+            },
+        ],
+        reason="idle",
+    )
+
+    current_genes = core.evomemory_query_genes(
+        scope="project", current_only=True, limit=10
+    )
+    stale_genes = core.evomemory_query_genes(scope="project", stale_only=True, limit=10)
+    current_capsule = core.evomemory_query_capsules(
+        scope="project", current_only=True, limit=10
+    )["capsules"][0]
+
+    stale_git_commit_gene = next(
+        item
+        for item in stale_genes["genes"]
+        if item["key"] == "git_commit_behavior" and item["value"] == "disabled"
+    )
+
+    assert current_capsule["is_stale"] is False
+    assert set(current_capsule["gene_ids"]) == {
+        item["id"] for item in current_genes["genes"]
+    }
+    assert stale_git_commit_gene["id"] not in current_capsule["gene_ids"]
+
+
+def test_revision_self_heals_missing_current_governance_assets_for_current_beliefs():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+    import sqlite3
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-governance-self-heal-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+    core.start_session("ses_governance_self_heal", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_governance_self_heal",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_self_heal_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_self_heal_2", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                ],
+            },
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_governance_self_heal",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_self_heal_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_self_heal_2", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                ],
+            },
+            {
+                "info": {"id": "msg_self_heal_3", "role": "user"},
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "这个项目里还是不要自动提交 git commit",
+                    }
+                ],
+            },
+        ],
+        reason="idle",
+    )
+
+    with sqlite3.connect(state_path) as connection:
+        connection.execute(
+            "UPDATE genes SET is_stale = 1, demoted_at = CURRENT_TIMESTAMP WHERE scope = ? AND key = ?",
+            ("project", "git_commit_behavior"),
+        )
+        connection.execute(
+            "UPDATE capsules SET is_stale = 1, demoted_at = CURRENT_TIMESTAMP WHERE scope = ?",
+            ("project",),
+        )
+
+    before_genes = core.evomemory_query_genes(
+        scope="project", key="git_commit_behavior", current_only=True, limit=10
+    )
+    before_capsules = core.evomemory_query_capsules(
+        scope="project", current_only=True, limit=10
+    )
+    assert before_genes["count"] == 0
+    assert before_capsules["count"] == 0
+
+    core.evomemory_run_revision(min_confidence=0.7)
+
+    after_genes = core.evomemory_query_genes(
+        scope="project", key="git_commit_behavior", current_only=True, limit=10
+    )
+    after_capsules = core.evomemory_query_capsules(
+        scope="project", current_only=True, limit=10
+    )
+
+    assert after_genes["count"] == 1
+    assert after_genes["genes"][0]["is_stale"] is False
+    assert after_genes["genes"][0]["demoted_at"] is None
+    assert after_capsules["count"] == 1
+    assert after_capsules["capsules"][0]["is_stale"] is False
+    assert after_capsules["capsules"][0]["demoted_at"] is None
+
+
+def test_compact_flush_self_heals_missing_current_governance_assets():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+    import sqlite3
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-compact-self-heal-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+    core.start_session("ses_compact_self_heal", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_compact_self_heal",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_compact_self_heal_1", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                ],
+            },
+            {
+                "info": {"id": "msg_compact_self_heal_2", "role": "user"},
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "这个项目里还是不要自动提交 git commit",
+                    }
+                ],
+            },
+        ],
+        reason="idle",
+    )
+
+    with sqlite3.connect(state_path) as connection:
+        connection.execute(
+            "UPDATE genes SET is_stale = 1, demoted_at = CURRENT_TIMESTAMP WHERE scope = ? AND key = ?",
+            ("project", "git_commit_behavior"),
+        )
+        connection.execute(
+            "UPDATE capsules SET is_stale = 1, demoted_at = CURRENT_TIMESTAMP WHERE scope = ?",
+            ("project",),
+        )
+
+    core.flush_session(
+        "ses_compact_self_heal",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_compact_self_heal_3", "role": "assistant"},
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "我已经确认这轮 compact 需要顺手校正治理资产。",
+                    }
+                ],
+            }
+        ],
+        reason="compact",
+    )
+
+    after_genes = core.evomemory_query_genes(
+        scope="project", key="git_commit_behavior", current_only=True, limit=10
+    )
+    after_capsules = core.evomemory_query_capsules(
+        scope="project", current_only=True, limit=10
+    )
+
+    assert after_genes["count"] == 1
+    assert after_genes["genes"][0]["demoted_at"] is None
+    assert after_capsules["count"] == 1
+    assert after_capsules["capsules"][0]["demoted_at"] is None
+
+
 def test_compact_flush_triggers_revision_maintenance_for_low_confidence_beliefs():
     from evomemory.context.bridge import BridgeCore, BridgeConfig
 
@@ -1882,6 +2675,137 @@ def test_maintenance_summary_exposes_status_and_runtime_fields():
     assert summary["updated_at"] is None
     assert summary["last_revision_at"] is None
     assert summary["last_reconcile_at"] is None
+
+
+def test_maintenance_summary_persists_revision_runtime_across_restart():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-maintenance-restart-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+    core.start_session(
+        "ses_maintenance_restart_revision", "/home/mechrevo/.config/opencode"
+    )
+    core.flush_session(
+        "ses_maintenance_restart_revision",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_maintenance_restart_revision_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_maintenance_restart_revision_2", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            },
+        ],
+        reason="idle",
+    )
+
+    belief = core.evomemory_query_beliefs(
+        scope="user", key="response_language", current_only=True, limit=10
+    )["facts"][0]
+    core.evomemory_record_feedback(
+        target_kind="belief",
+        target_id=belief["id"],
+        signal="correct",
+        note="Force revision before restart.",
+    )
+    core.evomemory_run_revision(min_confidence=0.7)
+    before = core.maintenance_summary()
+
+    restarted = BridgeCore(
+        BridgeConfig(state_path=state_path), backend=PromotionBackend()
+    )
+    after = restarted.maintenance_summary()
+
+    assert before["last_revision_at"] is not None
+    assert after["last_revision_at"] == before["last_revision_at"]
+    assert after["last_revision_revised_count"] == before["last_revision_revised_count"]
+    assert after["updated_at"] == before["updated_at"]
+
+
+def test_maintenance_summary_persists_reconcile_runtime_across_restart():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+    import sqlite3
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-maintenance-reconcile-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+    core.start_session(
+        "ses_maintenance_restart_reconcile", "/home/mechrevo/.config/opencode"
+    )
+    core.flush_session(
+        "ses_maintenance_restart_reconcile",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_maintenance_restart_reconcile_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_maintenance_restart_reconcile_2", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            },
+        ],
+        reason="idle",
+    )
+
+    belief = core.evomemory_query_beliefs(
+        scope="user", key="response_language", current_only=True, limit=10
+    )["facts"][0]
+    core.evomemory_record_feedback(
+        target_kind="belief",
+        target_id=belief["id"],
+        signal="correct",
+        note="Force reconcile before restart.",
+    )
+    revision = core.evomemory_run_revision(min_confidence=0.7)
+    gene_id = revision["demoted_genes"][0]["id"]
+    capsule_id = revision["demoted_capsules"][0]["id"]
+    with sqlite3.connect(state_path) as connection:
+        connection.execute(
+            "UPDATE genes SET is_stale = 0, demoted_at = NULL WHERE id = ?",
+            (gene_id,),
+        )
+        connection.execute(
+            "UPDATE capsules SET is_stale = 0, demoted_at = NULL WHERE id = ?",
+            (capsule_id,),
+        )
+
+    core.flush_session(
+        "ses_maintenance_restart_reconcile",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {
+                    "id": "msg_maintenance_restart_reconcile_3",
+                    "role": "assistant",
+                },
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "我已经确认治理资产需要在 compact 时自动校正。",
+                    }
+                ],
+            }
+        ],
+        reason="compact",
+    )
+    before = core.maintenance_summary()
+
+    restarted = BridgeCore(
+        BridgeConfig(state_path=state_path), backend=PromotionBackend()
+    )
+    after = restarted.maintenance_summary()
+
+    assert before["last_reconcile_at"] is not None
+    assert after["last_reconcile_at"] == before["last_reconcile_at"]
+    assert after["last_reconcile_gene_count"] == before["last_reconcile_gene_count"]
+    assert (
+        after["last_reconcile_capsule_count"] == before["last_reconcile_capsule_count"]
+    )
+    assert after["updated_at"] == before["updated_at"]
 
 
 def test_governance_scores_and_stale_detection_are_tracked():

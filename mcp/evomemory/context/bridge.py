@@ -73,6 +73,27 @@ EVOMEMORY_COLLECTION_NAME = "evomemory_drawers"
 EVOMEMORY_STATE_FILENAME = "evomemory_bridge_state.sqlite3"
 
 
+def _default_runtime_state() -> dict[str, Any]:
+    return {
+        "last_search_at": None,
+        "last_search_summary": None,
+        "last_flush_at": None,
+        "last_compaction_at": None,
+        "last_compaction_session_id": None,
+        "last_compaction_compacted_count": 0,
+        "last_compaction_summary_drawer_id": None,
+        "last_revision_at": None,
+        "last_revision_revised_count": 0,
+        "last_revision_invalidated_context_count": 0,
+        "last_revision_reconciled_gene_count": 0,
+        "last_revision_reconciled_capsule_count": 0,
+        "last_reconcile_at": None,
+        "last_reconcile_stale_belief_count": 0,
+        "last_reconcile_gene_count": 0,
+        "last_reconcile_capsule_count": 0,
+    }
+
+
 def _default_evomemory_home(home: Path | None = None) -> Path:
     return (home or Path.home()) / EVOMEMORY_HOME_DIRNAME
 
@@ -250,6 +271,8 @@ class BridgeConfig:
     search_limit: int = 5
     core_memory_limit: int = 6
     max_block_chars: int = 2000
+    runtime_overlay_reserved_chars: int = 96
+    runtime_base_min_chars: int = 80
     min_meaningful_chars: int = 6
     working_session_compact_threshold: int = 8
     working_session_retain_count: int = 4
@@ -890,15 +913,12 @@ class BridgeCore:
     def __init__(self, config: BridgeConfig | None = None, backend: Any | None = None):
         self.config = config or BridgeConfig()
         self.state_store = SessionStateStore(self.config.state_path)
+        persisted_state = self.state_store.load()
         self.repository = ContextRepository(backend or EvoMemoryBackend(self.config))
         self.backend = self.repository.backend
         self.runtime = {
-            "last_search_at": None,
-            "last_flush_at": None,
-            "last_compaction_at": None,
-            "last_compaction_session_id": None,
-            "last_compaction_compacted_count": 0,
-            "last_compaction_summary_drawer_id": None,
+            **_default_runtime_state(),
+            **(persisted_state.get("runtime") or {}),
         }
         self._runtime = self.runtime
         self.valid_roles = VALID_ROLES
@@ -927,7 +947,12 @@ class BridgeCore:
         return self.state_store.load()
 
     def _save_state(self, state: dict[str, Any]) -> None:
+        state["runtime"] = dict(self.runtime)
         self.state_store.save(state)
+
+    def _persist_runtime_state(self) -> None:
+        state = self._load_state()
+        self._save_state(state)
 
     def _normalize_directory(self, directory: str) -> str:
         normalized = (directory or "").replace("\\", "/").rstrip("/")
@@ -1056,11 +1081,15 @@ class BridgeCore:
     ) -> int:
         if not items:
             return used
+
+        title_cost = len(title) + (2 if lines else 0)
+        if used + title_cost > self.config.max_block_chars:
+            return used
         if lines:
             lines.append("")
             used += 1
         lines.append(title)
-        used += len(title)
+        used += len(title) + (1 if len(lines) > 1 else 0)
         for index, item in enumerate(items, start=1):
             drawer_id = item.get("drawer_id") or "?"
             if mode == "core":
@@ -1110,17 +1139,19 @@ class BridgeCore:
         )
         if core_memory_truncated_count > 0:
             notice = f"   ... {core_memory_truncated_count} more core memories omitted"
-            if used + len(notice) + 1 <= self.config.max_block_chars:
+            notice_cost = len(notice) + (1 if lines else 0)
+            if used + notice_cost <= self.config.max_block_chars:
                 lines.append(notice)
-                used += len(notice) + 1
+                used += notice_cost
         if context_truncated_count > 0:
             notice = f"   ... {context_truncated_count} more context memories omitted"
-            if used + len(notice) + 1 <= self.config.max_block_chars:
+            notice_cost = len(notice) + (2 if lines else 0)
+            if used + notice_cost <= self.config.max_block_chars:
                 if lines:
                     lines.append("")
                     used += 1
                 lines.append(notice)
-                used += len(notice) + 1
+                used += len(notice) + (1 if len(lines) > 1 else 0)
         used = self._append_block_lines(
             lines,
             used,
@@ -1294,6 +1325,7 @@ class BridgeCore:
         self.runtime["last_compaction_session_id"] = session_id
         self.runtime["last_compaction_compacted_count"] = len(rows_to_compact)
         self.runtime["last_compaction_summary_drawer_id"] = summary["drawer_id"]
+        self._persist_runtime_state()
 
     def health(self) -> dict[str, Any]:
         return self.query_service.health()
@@ -1658,12 +1690,98 @@ class BridgeCore:
         self.runtime["last_reconcile_stale_belief_count"] = len(stale_belief_ids)
         self.runtime["last_reconcile_gene_count"] = reconciled_gene_count
         self.runtime["last_reconcile_capsule_count"] = reconciled_capsule_count
+        self._persist_runtime_state()
         return {
             "stale_belief_count": len(stale_belief_ids),
             "reconciled_gene_count": reconciled_gene_count,
             "reconciled_capsule_count": reconciled_capsule_count,
             "genes": reconciled.get("genes", []),
             "capsules": reconciled.get("capsules", []),
+        }
+
+    def _repair_current_governance_assets(
+        self,
+        *,
+        rationale: str,
+        record_empty: bool = True,
+    ) -> dict[str, Any]:
+        current_beliefs = self.evomemory_query_beliefs(current_only=True, limit=100)[
+            "facts"
+        ]
+        repaired_genes: list[dict[str, Any]] = []
+        repaired_capsules: list[dict[str, Any]] = []
+        repaired_capsule_ids: set[str] = set()
+
+        for belief in current_beliefs:
+            scope = belief.get("scope")
+            key = belief.get("key")
+            value = belief.get("value")
+            if not scope or not key:
+                continue
+
+            current_genes = self.governance_service.list_genes(
+                scope=scope,
+                key=key,
+                current_only=True,
+                limit=100,
+            )["genes"]
+            had_current_gene = any(item.get("value") == value for item in current_genes)
+
+            gene_result = self.governance_service.ensure_gene_from_belief(belief)
+            gene = gene_result["gene"]
+            if not had_current_gene:
+                repaired_genes.append(gene)
+
+            current_capsules = self.governance_service.list_capsules(
+                scope=scope,
+                current_only=True,
+                limit=10,
+            )["capsules"]
+            had_current_capsule_with_gene = any(
+                gene["id"] in item.get("gene_ids", []) for item in current_capsules
+            )
+
+            capsule_result = self.governance_service.ensure_capsule_for_gene(
+                scope, gene["id"]
+            )
+            capsule = capsule_result["capsule"]
+            if (
+                not had_current_capsule_with_gene
+                and capsule["id"] not in repaired_capsule_ids
+            ):
+                repaired_capsules.append(capsule)
+                repaired_capsule_ids.add(capsule["id"])
+
+        repaired_gene_count = len(repaired_genes)
+        repaired_capsule_count = len(repaired_capsules)
+        if not record_empty and not (repaired_gene_count or repaired_capsule_count):
+            return {
+                "repaired_gene_count": 0,
+                "repaired_capsule_count": 0,
+                "genes": [],
+                "capsules": [],
+            }
+
+        for gene in repaired_genes:
+            self.governance_service.record_event(
+                action="reconcile",
+                target_kind="gene",
+                target_id=gene["id"],
+                rationale=rationale,
+            )
+        for capsule in repaired_capsules:
+            self.governance_service.record_event(
+                action="reconcile",
+                target_kind="capsule",
+                target_id=capsule["id"],
+                rationale=rationale,
+            )
+
+        return {
+            "repaired_gene_count": repaired_gene_count,
+            "repaired_capsule_count": repaired_capsule_count,
+            "genes": repaired_genes,
+            "capsules": repaired_capsules,
         }
 
     def evomemory_run_revision(self, *, min_confidence: float = 0.5) -> dict[str, Any]:
@@ -1728,6 +1846,10 @@ class BridgeCore:
             stale_belief_ids,
             rationale="reconciled stale governance asset during revision maintenance",
         )
+        repaired = self._repair_current_governance_assets(
+            rationale="repaired missing current governance asset during revision maintenance",
+            record_empty=False,
+        )
         if result["revised_count"]:
             self.evaluation_service.increment("revision_runs")
             self.evaluation_service.increment(
@@ -1772,6 +1894,7 @@ class BridgeCore:
         self.runtime["last_revision_reconciled_capsule_count"] = reconciled[
             "reconciled_capsule_count"
         ]
+        self._persist_runtime_state()
         return {
             **result,
             "invalidated_context_count": invalidated_context_count,
@@ -1781,6 +1904,10 @@ class BridgeCore:
             "reconciled_capsule_count": reconciled["reconciled_capsule_count"],
             "reconciled_genes": reconciled["genes"],
             "reconciled_capsules": reconciled["capsules"],
+            "repaired_gene_count": repaired["repaired_gene_count"],
+            "repaired_capsule_count": repaired["repaired_capsule_count"],
+            "repaired_genes": repaired["genes"],
+            "repaired_capsules": repaired["capsules"],
         }
 
     def evomemory_reconcile_governance(self) -> dict[str, Any]:
@@ -1791,10 +1918,21 @@ class BridgeCore:
                 if item.get("belief_id")
             )
         )
-        return self._reconcile_governance_assets(
+        reconciled = self._reconcile_governance_assets(
             stale_belief_ids,
             rationale="reconciled stale governance asset from historical belief state",
         )
+        repaired = self._repair_current_governance_assets(
+            rationale="repaired missing current governance asset during governance maintenance",
+            record_empty=False,
+        )
+        return {
+            **reconciled,
+            "repaired_gene_count": repaired["repaired_gene_count"],
+            "repaired_capsule_count": repaired["repaired_capsule_count"],
+            "repaired_genes": repaired["genes"],
+            "repaired_capsules": repaired["capsules"],
+        }
 
     def evomemory_export_snapshot(self, *, limit: int = 20) -> dict[str, Any]:
         normalized_limit = self._normalize_limit(limit, default=20)
@@ -1806,6 +1944,7 @@ class BridgeCore:
         return {
             "service": "evomemory",
             "context": self.mcp_status(),
+            "runtime_context": self.runtime.get("last_search_summary"),
             "belief": beliefs,
             "governance": {
                 "gene_count": genes["count"],

@@ -34,10 +34,147 @@ def _governance_sort_key(item: dict[str, Any]) -> tuple[int, float, int, str]:
     )
 
 
+def _trim_line(line: str, max_chars: int | None) -> str:
+    if max_chars is None:
+        return line
+    if max_chars <= 3:
+        return ""
+    if len(line) <= max_chars:
+        return line
+    return f"{line[: max_chars - 3]}..."
+
+
+def _trim_trailing_blank_lines(lines: list[str]) -> None:
+    while lines and not lines[-1].strip():
+        lines.pop()
+
+
+def _trim_trailing_empty_titles(lines: list[str]) -> None:
+    _trim_trailing_blank_lines(lines)
+    while lines and lines[-1].endswith(":"):
+        lines.pop()
+        _trim_trailing_blank_lines(lines)
+
+
 class RuntimeOrchestrator:
     def __init__(self, core: Any, evaluation_service: Any | None = None):
         self.core = core
         self.evaluation_service = evaluation_service
+
+    def _config_int(self, name: str, default: int = 0) -> int:
+        config = getattr(self.core, "config", None)
+        value = getattr(config, name, default)
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            return default
+        return max(0, normalized)
+
+    def _max_block_chars(self) -> int | None:
+        config = getattr(self.core, "config", None)
+        limit = getattr(config, "max_block_chars", None)
+        if limit is None:
+            return None
+        try:
+            normalized = int(limit)
+        except (TypeError, ValueError):
+            return None
+        return normalized if normalized > 0 else None
+
+    def _append_overlay_section(
+        self,
+        block: str,
+        title: str,
+        entries: list[str],
+        omitted_label: str,
+    ) -> str:
+        if not entries:
+            return block
+
+        limit = self._max_block_chars()
+        separator = "\n\n" if block else ""
+        titled_block = f"{block}{separator}{title}"
+        if limit is not None and len(titled_block) > limit:
+            return block
+        block = titled_block
+
+        included = 0
+        for entry in entries:
+            remaining = None if limit is None else limit - len(block) - 1
+            line = _trim_line(entry, remaining)
+            if not line:
+                break
+            candidate = f"{block}\n{line}"
+            if limit is not None and len(candidate) > limit:
+                break
+            block = candidate
+            included += 1
+
+        omitted = len(entries) - included
+        if omitted <= 0:
+            return block
+
+        notice = f"   ... {omitted} more {omitted_label} omitted"
+        candidate = f"{block}\n{notice}"
+        if limit is None or len(candidate) <= limit:
+            return candidate
+        return block
+
+    def _reserve_budget_for_overlay(
+        self,
+        block: str,
+        title: str,
+        entries: list[str],
+    ) -> str:
+        if not block or not entries:
+            return block
+
+        limit = self._max_block_chars()
+        if limit is None:
+            return block
+
+        minimum_cost = (2 if block else 0) + len(title) + 1 + len(entries[0])
+        if minimum_cost > limit:
+            return block
+
+        reserve_target = max(
+            minimum_cost,
+            min(limit, self._config_int("runtime_overlay_reserved_chars", 0)),
+        )
+        base_floor = min(
+            limit,
+            self._config_int("runtime_base_min_chars", 0),
+        )
+
+        if len(block) + reserve_target <= limit:
+            return block
+
+        def trim_to_target(target_free_chars: int, enforce_floor: bool) -> str | None:
+            lines = block.splitlines()
+            while True:
+                candidate_block = "\n".join(lines)
+                if len(candidate_block) + target_free_chars <= limit and (
+                    not enforce_floor or len(candidate_block) >= base_floor
+                ):
+                    return candidate_block
+                if not lines:
+                    return None
+                lines.pop()
+                _trim_trailing_empty_titles(lines)
+
+        candidate = trim_to_target(reserve_target, enforce_floor=True)
+        if candidate is not None:
+            return candidate
+
+        candidate = trim_to_target(minimum_cost, enforce_floor=True)
+        if candidate is not None:
+            return candidate
+
+        candidate = trim_to_target(minimum_cost, enforce_floor=False)
+        if candidate is not None:
+            return candidate
+
+        return block
 
     def _belief_memory(
         self, payload: dict[str, Any], limit: int = 6
@@ -108,30 +245,46 @@ class RuntimeOrchestrator:
         belief_memory: list[dict[str, Any]],
         governance_assets: dict[str, Any],
     ) -> str:
-        lines = [base_block] if base_block else []
+        block = base_block or ""
         if belief_memory:
-            if lines:
-                lines.append("")
-            lines.append("Belief memory:")
-            for index, item in enumerate(belief_memory, start=1):
-                lines.append(
-                    f"{index}. [{item.get('scope')}] {item.get('key')}={item.get('value')}"
-                )
+            belief_entries = [
+                f"{index}. [{item.get('scope')}] {item.get('key')}={item.get('value')}"
+                for index, item in enumerate(belief_memory, start=1)
+            ]
+            block = self._reserve_budget_for_overlay(
+                block,
+                "Belief memory:",
+                belief_entries,
+            )
+            block = self._append_overlay_section(
+                block,
+                "Belief memory:",
+                belief_entries,
+                "belief memories",
+            )
         genes = governance_assets.get("genes", [])
         capsules = governance_assets.get("capsules", [])
         if genes or capsules:
-            if lines:
-                lines.append("")
-            lines.append("Governance assets:")
-            for gene in genes:
-                lines.append(
-                    f"- gene[{gene.get('scope')}] {gene.get('key')}={gene.get('value')}"
+            governance_entries = [
+                f"- gene[{gene.get('scope')}] {gene.get('key')}={gene.get('value')}"
+                for gene in genes
+            ] + [
+                f"- capsule[{capsule.get('scope')}] genes={','.join(capsule.get('gene_ids', []))}"
+                for capsule in capsules
+            ]
+            if not belief_memory:
+                block = self._reserve_budget_for_overlay(
+                    block,
+                    "Governance assets:",
+                    governance_entries,
                 )
-            for capsule in capsules:
-                lines.append(
-                    f"- capsule[{capsule.get('scope')}] genes={','.join(capsule.get('gene_ids', []))}"
-                )
-        return "\n".join(lines)
+            block = self._append_overlay_section(
+                block,
+                "Governance assets:",
+                governance_entries,
+                "governance assets",
+            )
+        return block
 
     def augment_context_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         if self.evaluation_service is not None:

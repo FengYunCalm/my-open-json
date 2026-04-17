@@ -1795,3 +1795,28 @@ def test_search_context_reports_truncated_context_count():
     assert result["context_total_count"] == 5
     assert result["context_truncated_count"] == 2
     assert "2 more context memories omitted" in result["system_block"]
+
+
+def test_search_context_system_block_respects_budget_when_only_notices_fit():
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-bridge-budget-"))
+    core = BridgeCore(
+        BridgeConfig(
+            max_block_chars=80,
+            core_memory_limit=0,
+            search_limit=1,
+            state_path=temp_dir / "state.json",
+            wing_config_path=temp_dir / "wing_config.json",
+        ),
+        backend=FakeBackend(),
+    )
+
+    result = core.search_context(
+        "navigation",
+        "/home/mechrevo/.config/opencode",
+        session_id="ses_demo",
+    )
+
+    assert len(result["system_block"]) <= 80
+    assert "1 more core memories omitted" in result["system_block"]
+    assert "4 more context memories omitted" in result["system_block"]
+    assert "EvoMemory context for wing 'opencode':" not in result["system_block"]

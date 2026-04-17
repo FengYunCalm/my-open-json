@@ -1,12 +1,116 @@
 from __future__ import annotations
 
+from dataclasses import MISSING, fields
+import re
 from datetime import datetime, timezone
 from typing import Any
 
 
 class ContextQueryService:
+    _BUDGET_POLICY_KEYS = (
+        "max_block_chars",
+        "runtime_overlay_reserved_chars",
+        "runtime_base_min_chars",
+    )
+
     def __init__(self, core: Any):
         self.core = core
+
+    def _budget_policy_summary(self) -> dict[str, int | None]:
+        config = self.core.config
+        return {key: getattr(config, key, None) for key in self._BUDGET_POLICY_KEYS}
+
+    def _budget_policy_diff(self) -> dict[str, dict[str, int | None]]:
+        config = self.core.config
+        defaults: dict[str, int | None] = {}
+        for field in fields(config):
+            if field.name not in self._BUDGET_POLICY_KEYS:
+                continue
+            defaults[field.name] = (
+                field.default if field.default is not MISSING else None
+            )
+
+        diff: dict[str, dict[str, int | None]] = {}
+        for key, current in self._budget_policy_summary().items():
+            default = defaults.get(key)
+            if current == default:
+                continue
+            delta = None
+            if isinstance(current, int) and isinstance(default, int):
+                delta = current - default
+            diff[key] = {
+                "default": default,
+                "current": current,
+                "delta": delta,
+            }
+        return diff
+
+    def _displayed_runtime_overlay(self, system_block: str) -> dict[str, list[str]]:
+        belief_keys: list[str] = []
+        gene_keys: list[str] = []
+        capsule_scopes: list[str] = []
+        section: str | None = None
+        for raw_line in system_block.splitlines():
+            line = raw_line.strip()
+            if line == "Belief memory:":
+                section = "belief"
+                continue
+            if line == "Governance assets:":
+                section = "governance"
+                continue
+            if line.endswith(":") and line not in {
+                "Belief memory:",
+                "Governance assets:",
+            }:
+                section = None
+                continue
+            if not line or line.startswith("..."):
+                continue
+            if section == "belief":
+                match = re.match(r"^\d+\. \[[^\]]+\] ([^=]+)=", line)
+                if match:
+                    belief_keys.append(match.group(1))
+                continue
+            if section == "governance":
+                gene_match = re.match(r"^- gene\[[^\]]+\] ([^=]+)=", line)
+                if gene_match:
+                    gene_keys.append(gene_match.group(1))
+                    continue
+                capsule_match = re.match(r"^- capsule\[([^\]]+)\] ", line)
+                if capsule_match:
+                    capsule_scopes.append(capsule_match.group(1))
+        return {
+            "displayed_belief_keys": belief_keys,
+            "displayed_governance_gene_keys": gene_keys,
+            "displayed_capsule_scopes": capsule_scopes,
+        }
+
+    def _record_runtime_context(self, payload: dict[str, Any]) -> None:
+        displayed = self._displayed_runtime_overlay(payload.get("system_block", ""))
+        self.core.runtime["last_search_summary"] = {
+            "query": payload.get("query"),
+            "session_id": payload.get("session_id"),
+            "system_block_length": len(payload.get("system_block", "")),
+            "system_block_char_limit": getattr(
+                self.core.config, "max_block_chars", None
+            ),
+            "belief_memory_keys": [
+                item.get("key")
+                for item in payload.get("belief_memory", [])
+                if item.get("key")
+            ],
+            "governance_gene_keys": [
+                item.get("key")
+                for item in payload.get("governance_assets", {}).get("genes", [])
+                if item.get("key")
+            ],
+            "capsule_scopes": [
+                item.get("scope")
+                for item in payload.get("governance_assets", {}).get("capsules", [])
+                if item.get("scope")
+            ],
+            **displayed,
+        }
 
     def health(self) -> dict[str, Any]:
         status = self.core.repository.status()
@@ -58,7 +162,9 @@ class ContextQueryService:
                 context_truncated_count=context_truncated_count,
             ),
         }
-        return self.core.runtime_orchestrator.augment_context_payload(payload)
+        result = self.core.runtime_orchestrator.augment_context_payload(payload)
+        self._record_runtime_context(result)
+        return result
 
     def mcp_status(self) -> dict[str, Any]:
         payload = self.core.repository.status()
@@ -66,6 +172,8 @@ class ContextQueryService:
             {
                 "service": "evomemory-bridge",
                 "state_path": str(self.core.config.state_path),
+                "budget_policy": self._budget_policy_summary(),
+                "budget_policy_diff": self._budget_policy_diff(),
             }
         )
         return payload

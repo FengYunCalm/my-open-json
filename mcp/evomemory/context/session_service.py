@@ -76,6 +76,12 @@ class SessionLifecycleService:
                 continue
             memory_key = self.core.derive_memory_key(memory_tier, text)
             memory_value = self.core.derive_memory_value(memory_key, text)
+            if memory_tier in {"user_preference", "project_memory"} and (
+                not memory_key or memory_value is None
+            ):
+                memory_tier = "working_session"
+                memory_key = None
+                memory_value = None
             dedupe_hash = None
             filed_at = datetime.now(timezone.utc).isoformat()
             if memory_key and memory_tier in {"user_preference", "project_memory"}:
@@ -187,6 +193,18 @@ class SessionLifecycleService:
                 maintenance["reconcile"] = {
                     "reconciled_gene_count": reconcile["reconciled_gene_count"],
                     "reconciled_capsule_count": reconcile["reconciled_capsule_count"],
+                }
+            repair = self.core._repair_current_governance_assets(
+                rationale="repaired missing current governance asset during compact maintenance",
+                record_empty=False,
+            )
+            if repair.get("repaired_gene_count") or repair.get(
+                "repaired_capsule_count"
+            ):
+                maintenance = maintenance or {}
+                maintenance["repair"] = {
+                    "repaired_gene_count": repair["repaired_gene_count"],
+                    "repaired_capsule_count": repair["repaired_capsule_count"],
                 }
         return {
             "session_id": session_id,
