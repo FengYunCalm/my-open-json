@@ -727,6 +727,145 @@ def test_search_context_includes_beliefs_and_governance_assets():
     assert "Governance assets:" in result["system_block"]
 
 
+def test_search_context_prioritizes_higher_confidence_beliefs_in_runtime_overlay():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-runtime-confidence-"))
+    core = BridgeCore(
+        BridgeConfig(state_path=temp_dir / "state.sqlite3"), backend=PromotionBackend()
+    )
+    core.start_session("ses_runtime_confidence", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_runtime_confidence",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_runtime_lang_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_runtime_code_1", "role": "user"},
+                "parts": [{"type": "text", "text": "未经确认，不要修改代码"}],
+            },
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_runtime_confidence",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_runtime_lang_2", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_runtime_code_2", "role": "user"},
+                "parts": [{"type": "text", "text": "未经确认，还是不要修改代码"}],
+            },
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_runtime_confidence",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_runtime_code_3", "role": "user"},
+                "parts": [{"type": "text", "text": "未经确认，继续不要修改代码"}],
+            }
+        ],
+        reason="idle",
+    )
+
+    result = core.search_context(
+        "修改代码",
+        "/home/mechrevo/.config/opencode",
+        session_id="ses_runtime_confidence",
+    )
+
+    assert [item["key"] for item in result["belief_memory"][:2]] == [
+        "code_change_permission",
+        "response_language",
+    ]
+    assert (
+        result["belief_memory"][0]["confidence"]
+        > result["belief_memory"][1]["confidence"]
+    )
+    assert "1. [project] code_change_permission=confirm_first" in result["system_block"]
+
+
+def test_search_context_prioritizes_higher_score_governance_assets_in_runtime_overlay():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-runtime-governance-rank-"))
+    core = BridgeCore(
+        BridgeConfig(state_path=temp_dir / "state.sqlite3"), backend=PromotionBackend()
+    )
+    core.start_session("ses_runtime_governance", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_runtime_governance",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_runtime_gene_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_runtime_gene_2", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                ],
+            },
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_runtime_governance",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_runtime_gene_3", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_runtime_gene_4", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里还是不要自动提交 git commit"}
+                ],
+            },
+        ],
+        reason="idle",
+    )
+
+    language_gene = next(
+        item
+        for item in core.evomemory_query_genes(current_only=True, limit=10)["genes"]
+        if item["key"] == "response_language"
+    )
+    core.evomemory_record_feedback(
+        target_kind="gene",
+        target_id=language_gene["id"],
+        signal="success",
+        note="Language policy is the most reliable governance signal.",
+    )
+
+    result = core.search_context(
+        "git commit",
+        "/home/mechrevo/.config/opencode",
+        session_id="ses_runtime_governance",
+    )
+
+    assert [item["key"] for item in result["governance_assets"]["genes"][:2]] == [
+        "response_language",
+        "git_commit_behavior",
+    ]
+    assert (
+        result["governance_assets"]["genes"][0]["score"]
+        > result["governance_assets"]["genes"][1]["score"]
+    )
+    assert "gene[user] response_language=zh-cn" in result["system_block"]
+
+
 def test_evaluation_summary_tracks_promotions_supersedes_and_enriched_searches():
     from evomemory.context.bridge import BridgeCore, BridgeConfig
 
@@ -1074,6 +1213,19 @@ def test_benchmark_runner_scores_snapshot_health():
     assert benchmark["checks"]["governance_present"] is True
     assert benchmark["checks"]["feedback_present"] is True
     assert benchmark["checks"]["search_enrichment_present"] is True
+    assert benchmark["scenario_checks"]["response_language_captured"] is True
+    assert benchmark["scenario_checks"]["git_commit_gene_present"] is True
+    assert benchmark["scenario_checks"]["project_capsule_present"] is True
+    assert benchmark["scenario_checks"]["search_enrichment_active"] is True
+    assert benchmark["scenario_summary"]["captured_belief_keys"] == [
+        "git_commit_behavior",
+        "response_language",
+    ]
+    assert benchmark["scenario_summary"]["gene_keys"] == [
+        "git_commit_behavior",
+        "response_language",
+    ]
+    assert benchmark["scenario_summary"]["capsule_scopes"] == ["project", "user"]
 
 
 def test_belief_feedback_updates_confidence_and_audit_log():

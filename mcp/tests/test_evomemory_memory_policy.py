@@ -35,6 +35,22 @@ def test_classify_memory_tier_detects_project_constraints():
     )
 
 
+def test_classify_memory_tier_detects_english_user_preferences():
+    assert (
+        classify_memory_tier("user", "Please use English responses by default")
+        == "user_preference"
+    )
+
+
+def test_classify_memory_tier_detects_english_project_constraints():
+    assert (
+        classify_memory_tier(
+            "user", "In this repository, do not change code before confirmation"
+        )
+        == "project_memory"
+    )
+
+
 def test_classify_memory_tier_does_not_promote_assistant_project_summaries():
     assert (
         classify_memory_tier(
@@ -73,8 +89,22 @@ def test_derive_memory_key_detects_response_language():
     )
 
 
+def test_derive_memory_key_detects_response_language_from_english_phrase():
+    assert (
+        derive_memory_key("user_preference", "Please use English responses by default")
+        == "response_language"
+    )
+
+
 def test_derive_memory_key_detects_response_detail():
     assert derive_memory_key("user_preference", "默认详细一点") == "response_detail"
+
+
+def test_derive_memory_key_detects_response_detail_from_concise_phrase():
+    assert (
+        derive_memory_key("user_preference", "Keep responses concise by default")
+        == "response_detail"
+    )
 
 
 def test_derive_memory_key_detects_git_commit_behavior():
@@ -110,6 +140,15 @@ def test_derive_memory_value_normalizes_response_language():
     assert derive_memory_value("response_language", "以后都用英文回复") == "en"
 
 
+def test_derive_memory_value_normalizes_response_language_from_english_phrase():
+    assert (
+        derive_memory_value(
+            "response_language", "Please use English responses by default"
+        )
+        == "en"
+    )
+
+
 def test_derive_memory_value_normalizes_git_commit_behavior():
     assert (
         derive_memory_value("git_commit_behavior", "这个项目里不要自动提交 git commit")
@@ -124,6 +163,13 @@ def test_derive_memory_value_normalizes_git_commit_behavior():
 def test_derive_memory_value_normalizes_response_detail():
     assert derive_memory_value("response_detail", "默认简洁一点") == "brief"
     assert derive_memory_value("response_detail", "默认详细一点") == "detailed"
+
+
+def test_derive_memory_value_normalizes_response_detail_from_concise_phrase():
+    assert (
+        derive_memory_value("response_detail", "Keep responses concise by default")
+        == "brief"
+    )
 
 
 def test_derive_memory_value_normalizes_test_execution_behavior():
@@ -144,6 +190,16 @@ def test_derive_memory_value_normalizes_code_change_permission():
     )
     assert (
         derive_memory_value("code_change_permission", "现在可以直接改代码") == "allowed"
+    )
+
+
+def test_derive_memory_value_normalizes_code_change_permission_from_english_phrase():
+    assert (
+        derive_memory_value(
+            "code_change_permission",
+            "Do not change code before confirmation in this repository",
+        )
+        == "confirm_first"
     )
 
 

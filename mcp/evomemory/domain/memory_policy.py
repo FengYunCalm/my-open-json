@@ -7,6 +7,9 @@ PREFERENCE_PATTERNS = [
     re.compile(r"以后.*用"),
     re.compile(r"默认"),
     re.compile(r"请用"),
+    re.compile(r"please use"),
+    re.compile(r"by default"),
+    re.compile(r"default to"),
     re.compile(r"prefer"),
     re.compile(r"always"),
 ]
@@ -17,6 +20,11 @@ PROJECT_PATTERNS = [
     re.compile(r"本项目"),
     re.compile(r"这个仓库"),
     re.compile(r"当前仓库"),
+    re.compile(r"this project"),
+    re.compile(r"this repo"),
+    re.compile(r"this repository"),
+    re.compile(r"in this repo"),
+    re.compile(r"in this repository"),
     re.compile(r"未经确认"),
     re.compile(r"分析问题"),
 ]
@@ -27,6 +35,9 @@ CONSTRAINT_PATTERNS = [
     re.compile(r"禁止"),
     re.compile(r"必须"),
     re.compile(r"都要"),
+    re.compile(r"do not"),
+    re.compile(r"don't"),
+    re.compile(r"before confirmation"),
     re.compile(r"only"),
     re.compile(r"must"),
 ]
@@ -104,18 +115,30 @@ def should_skip_memory_capture(role: str | None, text: str, memory_tier: str) ->
 def derive_memory_key(memory_tier: str, text: str) -> str | None:
     normalized_text = (text or "").strip().lower()
     if memory_tier == "user_preference":
-        if "中文" in normalized_text or "英文" in normalized_text:
+        if any(
+            token in normalized_text for token in ["中文", "英文", "english", "chinese"]
+        ):
             return "response_language"
-        if "简洁" in normalized_text or "详细" in normalized_text:
+        if any(
+            token in normalized_text
+            for token in ["简洁", "详细", "concise", "brief", "verbose", "detailed"]
+        ):
             return "response_detail"
     if memory_tier == "project_memory":
         if "git commit" in normalized_text or "提交" in normalized_text:
             return "git_commit_behavior"
         if any(pattern.search(normalized_text) for pattern in TEST_PATTERNS):
             return "test_execution_behavior"
-        if "修改代码" in normalized_text or "改代码" in normalized_text:
-            if "确认" in normalized_text and any(
-                token in normalized_text for token in ["不要", "不能", "禁止"]
+        if any(
+            token in normalized_text
+            for token in ["修改代码", "改代码", "change code", "modify code"]
+        ):
+            if any(
+                token in normalized_text
+                for token in ["确认", "confirm", "confirmation"]
+            ) and any(
+                token in normalized_text
+                for token in ["不要", "不能", "禁止", "do not", "don't", "before"]
             ):
                 return "code_change_permission"
             if any(
@@ -134,12 +157,14 @@ def derive_memory_value(memory_key: str | None, text: str) -> str | None:
     if memory_key == "response_language":
         if "中文" in normalized_text:
             return "zh-cn"
+        if "chinese" in normalized_text:
+            return "zh-cn"
         if "英文" in normalized_text or "english" in normalized_text:
             return "en"
     if memory_key == "response_detail":
-        if "简洁" in normalized_text:
+        if any(token in normalized_text for token in ["简洁", "concise", "brief"]):
             return "brief"
-        if "详细" in normalized_text:
+        if any(token in normalized_text for token in ["详细", "verbose", "detailed"]):
             return "detailed"
     if memory_key == "git_commit_behavior":
         if any(token in normalized_text for token in ["不要", "不能", "禁止"]):
@@ -152,8 +177,11 @@ def derive_memory_value(memory_key: str | None, text: str) -> str | None:
         if any(token in normalized_text for token in ["必须", "都要", "每次", "记得"]):
             return "required"
     if memory_key == "code_change_permission":
-        if "确认" in normalized_text and any(
-            token in normalized_text for token in ["不要", "不能", "禁止"]
+        if any(
+            token in normalized_text for token in ["确认", "confirm", "confirmation"]
+        ) and any(
+            token in normalized_text
+            for token in ["不要", "不能", "禁止", "do not", "don't", "before"]
         ):
             return "confirm_first"
         if any(token in normalized_text for token in ["直接改代码", "可以直接改代码"]):
