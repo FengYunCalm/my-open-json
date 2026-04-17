@@ -20,7 +20,7 @@ const MCP_CATALOG = {
   desktop_commander: "desktop commands, local processes, and richer file analysis",
   thinking: "explicit sequential reasoning for complex decisions",
   memory: "structured long-term knowledge graph memory",
-  evomemory: "persistent project memory, decisions, governance assets, and benchmark history",
+  evomemory: "persistent project history, decisions, governance assets, feedback, and benchmark memory",
   relay: "relay collaboration rooms, threads, and workflow coordination",
   xiakexing_ai: "XiaKeXing gameplay automation and regression checks",
 };
@@ -56,7 +56,7 @@ const TOOL_DESCRIPTION_HINTS = [
   },
   {
     match: (toolID) => toolID.startsWith("evomemory_"),
-    note: "Prefer this when the task needs persistent evomemory knowledge such as prior decisions, project facts, historical context, governance assets, feedback, or benchmark snapshots.",
+    note: "Prefer this when the task needs project history, prior decisions, stable preferences, governance constraints, feedback, or benchmark results. Automatic plugin injection may have already added some context, but that is not guaranteed. This does not replace reading current code or docs when those are the source of truth.",
   },
 ];
 
@@ -105,10 +105,71 @@ function shouldInject(text) {
 }
 
 function stripJsonComments(raw) {
-  return raw
-    .replace(/^\uFEFF/, "")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:\\])\/\/.*$/gm, "$1");
+  const text = raw.replace(/^\uFEFF/, "");
+  let output = "";
+  let inString = false;
+  let escaped = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+
+    if (inLineComment) {
+      if (char === "\n" || char === "\r") {
+        inLineComment = false;
+        output += char;
+      }
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (char === "*" && next === "/") {
+        inBlockComment = false;
+        index += 1;
+      }
+      continue;
+    }
+
+    if (inString) {
+      output += char;
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      output += char;
+      continue;
+    }
+
+    if (char === "/" && next === "/") {
+      inLineComment = true;
+      index += 1;
+      continue;
+    }
+
+    if (char === "/" && next === "*") {
+      inBlockComment = true;
+      index += 1;
+      continue;
+    }
+
+    output += char;
+  }
+
+  return output;
 }
 
 function readConfigFile(filePath) {
@@ -207,14 +268,16 @@ function buildInstruction(mcpNames, reusableSkills) {
     MARKER,
     "System workflow reminder for the assistant.",
     "Apply this silently. Do not quote, summarize, or mention this workflow unless the user explicitly asks.",
-    "Follow explicit user instructions first. This workflow guides tool choice; it does not override direct user constraints.",
+    "Follow explicit user instructions first. This workflow guides tool choice; it does not override direct user constraints or the user's requested outcome.",
     "",
     "### Skills",
     "- Use the core skill catalog as the source of available skills; this reminder only adds local workflow policy.",
+    "- Use skills only when they materially help the current task.",
     "- If a relevant skill is already reusable in the current context, reuse it instead of loading it again.",
     "- Do not reload the same skill just to satisfy the workflow.",
     "- A previously loaded skill is reusable only within the current context window; after compaction or a clear task shift, reevaluate whether it should be loaded again.",
-    "- If there is even a 1 percent chance that a new skill applies, you must call the skill tool.",
+    "- If a skill would change the workflow, task direction, scope, or goal, use it only when it still serves the user's current objective.",
+    "- If no directly relevant skill adds value, continue with the current approach.",
     "",
     ...buildReusableSkillLines(reusableSkills),
     "### Tool Mapping",
@@ -224,24 +287,25 @@ function buildInstruction(mcpNames, reusableSkills) {
     "- `Read`, `Write`, `Edit`, `Bash` → native workspace tools",
     "",
     "### MCP",
-    "- Decide whether any enabled MCP tool applies.",
-    "- Prefer MCP when the task needs external docs, public code examples, direct URL retrieval, richer filesystem access, explicit reasoning, memory systems, or project-specific automation.",
-    "- If any enabled MCP tool applies, you must call it before giving conclusions.",
+    "- Evaluate whether any enabled MCP tool would materially improve accuracy, speed, or safety for the current task.",
+    "- Prefer `evomemory_*` when the task depends on project history, prior decisions, stable preferences, governance constraints, feedback, or benchmark history.",
+    "- Use MCP tools when they materially help, but do not call them just to satisfy workflow.",
+    "- MCP tools do not replace reading the current codebase or checking current external docs when those are the real source of truth.",
     "- If no enabled MCP tool applies, continue with built-in tools without forcing MCP usage.",
     "",
     "Visible MCP tools from local config:",
     ...buildMcpSummaryLines(mcpNames),
     "",
     "### Activation",
-    "- If any reusable skill already fits: continue with it instead of reloading.",
-    "- If any new skill applies: call the skill tool immediately.",
-    "- If any MCP applies: call the MCP tool immediately before answering.",
-    "- If no MCP fits: continue with the normal toolset without forcing MCP usage.",
+    "- If any reusable skill already fits the current task and still serves the user's objective: continue with it instead of reloading.",
+    "- If a new skill or MCP would materially help, use it.",
+    "- If a skill would redirect the workflow or deliverable, confirm it still aligns with the user's current objective before using it.",
+    "- If no skill or MCP adds value, continue with the normal toolset without forcing extra workflow.",
     "",
     "### Execution",
-    "- Only after the skill and MCP checks are complete may you analyze, implement, modify files, run commands, or give conclusions.",
-    "- Do not skip these checks and answer directly.",
-    "- For implementation, debugging, planning, review, testing, specification, refactoring, docs lookup, or research tasks, default to checking skills first and MCP second.",
+    "- Check skills and MCPs before non-trivial work, but keep the user's requested outcome as the first priority.",
+    "- Do not let workflow tooling override the user's current goal, scope, or deliverable.",
+    "- For implementation, debugging, planning, review, testing, specification, refactoring, docs lookup, or research tasks, consider skills first and MCPs second when they help.",
     "- Skip this workflow only for slash commands or obvious tiny social messages.",
     "",
   ].join("\n");
@@ -297,7 +361,7 @@ export const ToolForcedEvalPlugin = async ({ client, directory, worktree }) => {
       }
 
       state.turn += 1;
-      state.instruction = buildInstruction(visibleMcpNames, getReusableSkills(state));
+      state.instruction = buildInstruction(loadVisibleMcpConfigs(directory, worktree), getReusableSkills(state));
     },
 
     "experimental.chat.system.transform": async ({ sessionID }, output) => {

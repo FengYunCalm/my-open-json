@@ -2,6 +2,23 @@ import path from 'path'
 import fs from 'fs'
 
 const SMALL_TALK = new Set(['ok', 'okay', 'yes', 'no', 'thanks', 'thank you', 'continue', 'start', 'go'])
+const HISTORY_HINTS = [
+  /\b(prior|previous|earlier|past|history|historical|remember|remind|decisions?|preferences?|constraint|constraints|feedback|benchmark)\b/i,
+  /\bwhat did we decide\b/i,
+  /\bused to\b/i,
+  /\bstable preferences?\b/i,
+  /(之前|先前|以前|过去|历史|历史决策|偏好|约束|反馈|基准|记忆)/,
+]
+const CURRENT_CODE_HINTS = [
+  /\bcurrent implementation\b/i,
+  /\bcurrent code\b/i,
+  /\bexplain the current implementation\b/i,
+  /\bshow me the current\b/i,
+  /\b(which|what|this|that|the)\s+(file|function|class)\b/i,
+  /\bline \d+\b/i,
+  /[\w./-]+\.(js|jsx|ts|tsx|mjs|cjs|py|json|jsonc|md)\b/i,
+  /(当前实现|当前代码|第\d+行|这个文件|这个函数|这个类|哪个文件|哪个函数|哪个类)/,
+]
 
 export function collectText(parts = []) {
   return parts
@@ -16,7 +33,15 @@ export function shouldSearch(text, config = {}) {
   if (normalized.startsWith('/')) return false
   if (normalized.includes('<command-message>')) return false
   if (SMALL_TALK.has(normalized)) return false
-  return normalized.length >= (config.minSearchChars ?? 16)
+  if (normalized.length < (config.minSearchChars ?? 16)) return false
+
+  const hasHistoryHint = HISTORY_HINTS.some((pattern) => pattern.test(text || ''))
+  if (hasHistoryHint) return true
+
+  const hasCurrentCodeHint = CURRENT_CODE_HINTS.some((pattern) => pattern.test(text || ''))
+  if (hasCurrentCodeHint) return false
+
+  return true
 }
 
 export function messagesSinceCheckpoint(messages = [], checkpoint = null) {
@@ -29,7 +54,7 @@ export function messagesSinceCheckpoint(messages = [], checkpoint = null) {
 export function buildSystemBlock(payload, maxChars = 1800) {
   if (!payload?.results?.length) return ''
   const lines = [
-    `EvoMemory context for wing '${payload.wing ?? 'unknown'}':`,
+    `Optional historical context from EvoMemory for wing '${payload.wing ?? 'unknown'}'. Use only if it directly helps the current request:`,
   ]
   let used = lines[0].length
   for (const [index, item] of payload.results.entries()) {

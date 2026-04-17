@@ -13,6 +13,40 @@ test('shouldSearch ignores tiny small-talk and slash commands', () => {
   assert.equal(shouldSearch('drawer navigation is missing from search results', { minSearchChars: 16 }), true)
 })
 
+test('shouldSearch prefers history-seeking prompts over current-code inspection prompts', () => {
+  assert.equal(
+    shouldSearch('please explain the current implementation in plugins/tool-forced-eval.js', { minSearchChars: 16 }),
+    false,
+  )
+  assert.equal(
+    shouldSearch('what did we decide earlier about git commit behavior in this project', { minSearchChars: 16 }),
+    true,
+  )
+  assert.equal(
+    shouldSearch('remind me of the prior project decisions and stable preferences for evomemory usage', { minSearchChars: 16 }),
+    true,
+  )
+})
+
+test('shouldSearch handles Chinese history prompts and current-code prompts', () => {
+  assert.equal(
+    shouldSearch('请回顾一下这个项目之前关于自动提交 git commit 的历史决策和用户偏好', { minSearchChars: 16 }),
+    true,
+  )
+  assert.equal(
+    shouldSearch('这个模块过去是怎么处理记忆注入的', { minSearchChars: 16 }),
+    true,
+  )
+  assert.equal(
+    shouldSearch('请解释一下 plugins/tool-forced-eval.js 这个文件的当前实现', { minSearchChars: 16 }),
+    false,
+  )
+  assert.equal(
+    shouldSearch('当前是哪个文件在处理 evomemory 的自动搜索', { minSearchChars: 16 }),
+    false,
+  )
+})
+
 test('buildSystemBlock includes source metadata while staying compact', () => {
   const block = buildSystemBlock(
     {
@@ -32,6 +66,7 @@ test('buildSystemBlock includes source metadata while staying compact', () => {
     240,
   )
 
+  assert.match(block, /Optional historical context from EvoMemory for wing 'opencode'/)
   assert.match(block, /drawer=drawer_opencode_opencode-session_abc123/)
   assert.match(block, /\[session\]/)
   assert.match(block, /room=opencode-session/)

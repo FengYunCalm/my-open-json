@@ -61,10 +61,11 @@
 
 ### Skill 与代理
 
-- 当前环境已安装多套 skill，覆盖规划、调试、测试、代码审查、文档、BMAD、game、graphify、协作等方向；遇到匹配任务，优先通过 `skill` 工具检查并加载对应 skill，不要跳过。
+- 当前环境已安装多套 skill，覆盖规划、调试、测试、代码审查、文档、BMAD、game、graphify、协作等方向；先判断某个 skill 是否与当前任务直接匹配且确有收益，再通过 `skill` 工具加载；不要为了走流程而硬套 skill。
 - 不要凭记忆复述 skill 内容；需要时重新加载，以当前版本为准。
 - 若当前会话已经加载 `using-superpowers`，不要重复加载它。
 - 优先使用本地已安装、与当前任务直接相关的 skill；没有匹配 skill 时，再采用手工流程。
+- 对会改变工作流、任务方向、范围、交付物或目标的 skill，必须先确认它仍然服务于用户当前明确目标；若冲突，以用户目标为准，可局部借用方法，但不要为了迎合 skill 而整体改写任务。
 - 当前环境已具备多代理能力；需要时按任务类型路由到合适角色，而不是所有任务都自己硬做。
 - 代码库内部定位、模式搜集、结构摸排，优先考虑 `explore` 一类能力；外部库文档、开源实现和最佳实践，优先考虑文档检索或研究型代理；复杂评审、架构权衡、疑难问题，再考虑更强的咨询型代理。
 
@@ -94,7 +95,7 @@
 ### Skill 工作流
 
 - 当前全局 skill 已经过筛选：默认保留可直接在 OpenCode 使用、依赖清晰、无断链的 skill；对有前置条件的 skill，使用前先检查其本地说明。
-- 当前全局插件已启用 `plugins/tool-forced-eval.js`，由它统一承担本地 skill / MCP 工作流策略注入、skill 复用窗口控制，以及重点 MCP 工具描述补强；它用于提高 skill / MCP 使用率，不替代实际判断。
+- 当前全局插件已启用 `plugins/tool-forced-eval.js`，由它统一承担本地 skill / MCP 工作流策略注入、skill 复用窗口控制，以及重点 MCP 工具描述补强；它用于提高 skill / MCP 使用质量，不替代实际判断，也不高于用户当前目标。
 - `openspec-*` skill 现在依赖本机已安装的 `openspec` CLI；若任务适合规格驱动流程，优先按 OpenSpec 工作流执行，而不是手工拼流程。
 - `brainstorming`、`writing-plans`、`executing-plans`、`writing-skills` 等流程型 skill 默认使用项目内文档路径；除非项目自己约定，不要再默认写入 `docs/superpowers/`。
 

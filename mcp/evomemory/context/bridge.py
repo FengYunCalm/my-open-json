@@ -1156,7 +1156,7 @@ class BridgeCore:
         used = self._append_block_lines(
             lines,
             used,
-            f"EvoMemory context for wing '{wing}':",
+            f"Optional historical context from EvoMemory for wing '{wing}'. Use only if it directly helps the current request:",
             results,
             "context",
         )

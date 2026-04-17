@@ -990,7 +990,7 @@ def test_runtime_overlay_can_trim_base_block_to_keep_top_belief():
     result = orchestrator._augment_system_block(
         "   ... 2 more core memories omitted\n\n"
         "   ... 1 more context memories omitted\n\n"
-        "EvoMemory context for wing 'opencode':\n"
+        "Optional historical context from EvoMemory for wing 'opencode'. Use only if it directly helps the current request:\n"
         "1. [1.00][session] drawer=drawer_m1 room=opencode-session role=user src=session:ses\n"
         "   User: 以后都用中文回复",
         [
