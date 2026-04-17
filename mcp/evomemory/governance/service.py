@@ -409,6 +409,91 @@ class GovernancePlaneService:
     def demote_assets_for_revised_beliefs(self, belief_ids: list[str]) -> dict:
         return self.demote_assets_for_superseded_beliefs(belief_ids)
 
+    def reconcile_stale_assets(self, stale_belief_ids: list[str]) -> dict:
+        stale_belief_id_set = set(stale_belief_ids)
+        if not stale_belief_id_set:
+            return {"genes": [], "capsules": []}
+
+        demoted_at = datetime.now(timezone.utc).isoformat()
+        reconciled_gene_ids = {
+            item.get("id")
+            for item in self._fetch_genes()
+            if item.get("source_fact_id") in stale_belief_id_set
+            and item.get("is_stale")
+        }
+
+        if self.path is None:
+            reconciled_genes = []
+            for gene in self._genes:
+                if gene.get("source_fact_id") not in stale_belief_id_set:
+                    continue
+                if gene.get("is_stale"):
+                    continue
+                gene["score"] = max(0, int(gene.get("score") or 0) - 1)
+                gene["is_stale"] = True
+                gene["demoted_at"] = demoted_at
+                reconciled_gene_ids.add(gene["id"])
+                reconciled_genes.append(gene)
+
+            reconciled_capsules = []
+            for capsule in self._capsules:
+                capsule_gene_ids = set(capsule.get("gene_ids", []))
+                if not capsule_gene_ids:
+                    continue
+                if capsule.get("is_stale"):
+                    continue
+                if not capsule_gene_ids.issubset(reconciled_gene_ids):
+                    continue
+                capsule["score"] = max(0, int(capsule.get("score") or 0) - 1)
+                capsule["is_stale"] = True
+                capsule["demoted_at"] = demoted_at
+                reconciled_capsules.append(capsule)
+            return {"genes": reconciled_genes, "capsules": reconciled_capsules}
+
+        with self._connect() as connection:
+            stale_gene_ids = {
+                item.get("id")
+                for item in self._fetch_genes()
+                if item.get("is_stale") and item.get("id")
+            }
+            for gene in self._fetch_genes():
+                if gene.get("source_fact_id") not in stale_belief_id_set:
+                    continue
+                if gene.get("is_stale"):
+                    continue
+                connection.execute(
+                    "UPDATE genes SET score = CASE WHEN score > 0 THEN score - 1 ELSE 0 END, is_stale = 1, demoted_at = ? WHERE id = ?",
+                    (demoted_at, gene["id"]),
+                )
+                reconciled_gene_ids.add(gene["id"])
+                stale_gene_ids.add(gene["id"])
+            for capsule in self._fetch_capsules():
+                capsule_gene_ids = set(capsule.get("gene_ids", []))
+                if not capsule_gene_ids:
+                    continue
+                if capsule.get("is_stale"):
+                    continue
+                if not capsule_gene_ids.issubset(stale_gene_ids):
+                    continue
+                connection.execute(
+                    "UPDATE capsules SET score = CASE WHEN score > 0 THEN score - 1 ELSE 0 END, is_stale = 1, demoted_at = ? WHERE id = ?",
+                    (demoted_at, capsule["id"]),
+                )
+
+        reconciled_genes = [
+            item
+            for item in self._fetch_genes()
+            if item.get("id") in reconciled_gene_ids
+            and item.get("demoted_at") == demoted_at
+        ]
+        reconciled_capsules = [
+            item
+            for item in self._fetch_capsules()
+            if item.get("demoted_at") == demoted_at
+            and set(item.get("gene_ids", [])).issubset(reconciled_gene_ids)
+        ]
+        return {"genes": reconciled_genes, "capsules": reconciled_capsules}
+
     def list_events(self, limit: int = 20) -> dict:
         events = self._fetch_events()
         return {"count": len(events[:limit]), "events": events[:limit]}

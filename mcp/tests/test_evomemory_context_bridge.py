@@ -10,8 +10,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from evomemory.context.bridge import (
     EVOMEMORY_COLLECTION_NAME,
     EVOMEMORY_PALACE_ENV,
-    LEGACY_COLLECTION_NAME,
-    LEGACY_PALACE_ENV,
     BridgeConfig,
     BridgeCore,
     EvoMemoryBackend,
@@ -520,24 +518,20 @@ def make_core(**config_overrides) -> tuple[BridgeCore, FakeBackend]:
     return core, backend
 
 
-def test_bridge_config_migrates_legacy_state_file_to_evomemory_name():
+def test_bridge_config_keeps_evomemory_state_path_without_legacy_migration():
     temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-state-migrate-"))
-    legacy_state_path = temp_dir / "mempalace_bridge_state.json"
     evomemory_state_path = temp_dir / "evomemory_bridge_state.sqlite3"
-    legacy_state_path.write_text("legacy", encoding="utf-8")
 
     config = BridgeConfig(state_path=evomemory_state_path)
 
     assert config.state_path == evomemory_state_path
-    assert evomemory_state_path.read_text(encoding="utf-8") == "legacy"
-    assert legacy_state_path.exists() is False
+    assert evomemory_state_path.exists() is False
 
 
-def test_resolve_palace_path_prefers_evomemory_env_over_legacy_env():
+def test_resolve_palace_path_prefers_evomemory_env():
     temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-palace-env-"))
     env = {
         EVOMEMORY_PALACE_ENV: str(temp_dir / "custom" / "evomemory-palace"),
-        LEGACY_PALACE_ENV: str(temp_dir / "custom" / "legacy-palace"),
     }
 
     resolved = _resolve_palace_path(None, env=env, home=temp_dir)
@@ -545,25 +539,17 @@ def test_resolve_palace_path_prefers_evomemory_env_over_legacy_env():
     assert resolved == temp_dir / "custom" / "evomemory-palace"
 
 
-def test_resolve_palace_path_migrates_legacy_directory_to_evomemory_home():
+def test_resolve_palace_path_defaults_to_evomemory_home():
     temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-palace-migrate-"))
-    legacy_palace = temp_dir / ".mempalace" / "palace"
-    legacy_palace.mkdir(parents=True)
-    (legacy_palace / "marker.txt").write_text("legacy", encoding="utf-8")
 
     resolved = _resolve_palace_path(None, env={}, home=temp_dir)
 
     assert resolved == temp_dir / ".evomemory" / "palace"
-    assert (resolved / "marker.txt").read_text(encoding="utf-8") == "legacy"
-    assert legacy_palace.is_symlink() is True
-    assert legacy_palace.resolve() == resolved
+    assert resolved.exists() is False
 
 
-def test_resolve_wing_config_path_migrates_legacy_config_to_evomemory_home():
+def test_resolve_wing_config_path_defaults_to_evomemory_home():
     temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-wing-config-"))
-    legacy_config = temp_dir / ".mempalace" / "wing_config.json"
-    legacy_config.parent.mkdir(parents=True)
-    legacy_config.write_text('{"default": "opencode"}', encoding="utf-8")
 
     resolved = _resolve_wing_config_path(
         temp_dir / ".evomemory" / "wing_config.json",
@@ -571,12 +557,10 @@ def test_resolve_wing_config_path_migrates_legacy_config_to_evomemory_home():
     )
 
     assert resolved == temp_dir / ".evomemory" / "wing_config.json"
-    assert resolved.read_text(encoding="utf-8") == '{"default": "opencode"}'
-    assert legacy_config.is_symlink() is True
-    assert legacy_config.resolve() == resolved
+    assert resolved.exists() is False
 
 
-def test_backend_migrates_legacy_collection_to_evomemory_collection_name():
+def test_backend_uses_evomemory_collection_name_without_legacy_migration():
     class FakeCollection:
         def __init__(self, name, rows=None):
             self.name = name
@@ -609,24 +593,7 @@ def test_backend_migrates_legacy_collection_to_evomemory_collection_name():
 
     class FakeClient:
         def __init__(self):
-            self.collections = {
-                LEGACY_COLLECTION_NAME: FakeCollection(
-                    LEGACY_COLLECTION_NAME,
-                    rows=[
-                        {
-                            "id": "drawer_opencode_opencode-session_migrate",
-                            "document": "User:\nremember me",
-                            "metadata": {
-                                "wing": "opencode",
-                                "room": "opencode-session",
-                            },
-                        }
-                    ],
-                )
-            }
-
-        def list_collections(self):
-            return list(self.collections.values())
+            self.collections = {}
 
         def get_collection(self, name):
             if name not in self.collections:
@@ -646,10 +613,166 @@ def test_backend_migrates_legacy_collection_to_evomemory_collection_name():
     collection = EvoMemoryBackend._collection_for(backend, create=True)
 
     assert collection.name == EVOMEMORY_COLLECTION_NAME
-    assert collection.count() == 1
-    assert backend._client.collections[EVOMEMORY_COLLECTION_NAME].rows[0]["id"] == (
-        "drawer_opencode_opencode-session_migrate"
+    assert collection.count() == 0
+
+
+def test_flush_session_skips_low_signal_control_messages():
+    core, backend = make_core()
+
+    core.start_session("ses_skip", "/home/mechrevo/.config/opencode")
+    result = core.flush_session(
+        "ses_skip",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_skip_1", "role": "user"},
+                "parts": [{"type": "text", "text": "继续"}],
+            },
+            {
+                "info": {"id": "msg_skip_2", "role": "assistant"},
+                "parts": [{"type": "text", "text": "我先看一下"}],
+            },
+        ],
+        reason="idle",
     )
+
+    assert result["saved"] == 0
+    assert backend.saved_entries == []
+
+
+def test_flush_session_skips_long_assistant_progress_updates():
+    core, backend = make_core()
+
+    core.start_session("ses_skip_long_progress", "/home/mechrevo/.config/opencode")
+    result = core.flush_session(
+        "ses_skip_long_progress",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_skip_long_progress", "role": "assistant"},
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "我会先检查 bridge 和 state store 的差异，再对一下当前会话的连接链路。",
+                    }
+                ],
+            }
+        ],
+        reason="idle",
+    )
+
+    assert result["saved"] == 0
+    assert backend.saved_entries == []
+
+
+def test_flush_session_keeps_substantive_assistant_analysis_as_working_session():
+    core, backend = make_core()
+
+    core.start_session("ses_assistant_analysis", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_assistant_analysis",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_assistant_analysis", "role": "assistant"},
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "我检查了 bridge 和 state store，根因是 stdio 与 HTTP 双链路同时写同一套状态文件，导致当前会话和后台 bridge 的视图不一致。",
+                    }
+                ],
+            }
+        ],
+        reason="idle",
+    )
+
+    assert backend.saved_entries[0]["metadata"]["memory_tier"] == "working_session"
+
+
+def test_build_working_session_summary_content_flattens_previous_summaries():
+    core, _backend = make_core()
+
+    content = core._build_working_session_summary_content(
+        [
+            {
+                "message_id": "summary_old",
+                "text": "Working session summary:\n- bridge 健康检查返回 200\n- state store 快照不一致",
+                "working_summary": True,
+                "metadata": {"session_order": 1},
+            },
+            {
+                "message_id": "msg_analysis",
+                "text": "Assistant:\n最终结论是当前会话还连着旧 stdio MCP，所以需要统一到 HTTP bridge。",
+                "working_summary": False,
+                "metadata": {"session_order": 2},
+            },
+        ]
+    )
+
+    assert content.count("Working session summary:") == 1
+    assert "- Working session summary:" not in content
+    assert "- bridge 健康检查返回 200" in content
+    assert "- state store 快照不一致" in content
+    assert (
+        "- Assistant: 最终结论是当前会话还连着旧 stdio MCP，所以需要统一到 HTTP bridge。"
+        in content
+    )
+
+
+def test_backend_format_row_surfaces_memory_metadata():
+    backend = EvoMemoryBackend.__new__(EvoMemoryBackend)
+
+    row = EvoMemoryBackend._format_row(
+        backend,
+        drawer_id="drawer_test",
+        text="Assistant:\nsummary",
+        metadata={
+            "wing": "opencode",
+            "room": "opencode-session",
+            "source_file": "session:ses_demo",
+            "session_id": "ses_demo",
+            "message_id": "msg_demo",
+            "role": "assistant",
+            "memory_tier": "working_session",
+            "memory_key": "working_session_summary",
+            "memory_value": "ses_demo",
+            "valid_from": "2026-04-17T00:00:00+00:00",
+            "valid_to": "2026-04-17T01:00:00+00:00",
+            "working_summary": True,
+            "filed_at": "2026-04-17T00:00:00+00:00",
+        },
+    )
+
+    assert row["memory_key"] == "working_session_summary"
+    assert row["memory_value"] == "ses_demo"
+    assert row["valid_from"] == "2026-04-17T00:00:00+00:00"
+    assert row["valid_to"] == "2026-04-17T01:00:00+00:00"
+    assert row["working_summary"] is True
+
+
+def test_flush_session_does_not_promote_assistant_constraint_summary_to_project_memory():
+    core, backend = make_core()
+
+    core.start_session("ses_assistant_summary", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_assistant_summary",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_assistant_summary", "role": "assistant"},
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "这个项目里不要自动提交 git commit，未经确认不要修改代码，修改后都要跑测试。",
+                    }
+                ],
+            }
+        ],
+        reason="idle",
+    )
+
+    assert backend.saved_entries[0]["metadata"]["memory_tier"] == "working_session"
+    assert backend.saved_entries[0]["metadata"].get("memory_key") is None
 
 
 def test_backend_save_entry_omits_none_metadata_values():
@@ -891,7 +1014,12 @@ def test_flush_session_persists_session_order_for_new_messages():
         },
         {
             "info": {"id": "msg_002", "role": "assistant"},
-            "parts": [{"type": "text", "text": "I will add session browsing"}],
+            "parts": [
+                {
+                    "type": "text",
+                    "text": "The missing drawer navigation comes from search results that do not carry drawer_id metadata.",
+                }
+            ],
         },
     ]
 
@@ -1228,7 +1356,12 @@ def test_flush_session_skips_duplicate_working_session_messages():
         [
             {
                 "info": {"id": "msg_work_1", "role": "assistant"},
-                "parts": [{"type": "text", "text": "我先检查 bridge 日志"}],
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "bridge 健康检查返回 200，但 flush 阶段没有写入 belief_facts，所以当前会话看不到最新状态。",
+                    }
+                ],
             }
         ],
         reason="idle",
@@ -1239,11 +1372,21 @@ def test_flush_session_skips_duplicate_working_session_messages():
         [
             {
                 "info": {"id": "msg_work_1", "role": "assistant"},
-                "parts": [{"type": "text", "text": "我先检查 bridge 日志"}],
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "bridge 健康检查返回 200，但 flush 阶段没有写入 belief_facts，所以当前会话看不到最新状态。",
+                    }
+                ],
             },
             {
                 "info": {"id": "msg_work_2", "role": "assistant"},
-                "parts": [{"type": "text", "text": "我先检查 bridge  日志"}],
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "bridge 健康检查返回 200，但 flush 阶段没有写入 belief_facts，所以当前会话看不到最新状态。",
+                    }
+                ],
             },
         ],
         reason="idle",
@@ -1254,7 +1397,7 @@ def test_flush_session_skips_duplicate_working_session_messages():
         for item in backend.saved_entries
         if item["metadata"].get("memory_tier") == "working_session"
         and item["metadata"].get("dedupe_hash") is not None
-        and "bridge 日志" in item["content"]
+        and "belief_facts" in item["content"]
     ]
     assert len(matching) == 1
 
@@ -1272,19 +1415,39 @@ def test_flush_session_compacts_old_working_session_messages_into_summary():
         [
             {
                 "info": {"id": "msg_c1", "role": "assistant"},
-                "parts": [{"type": "text", "text": "先检查 bridge"}],
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "bridge 健康检查返回 200，但是当前会话没有拿到 belief_facts 表里的最新事实。",
+                    }
+                ],
             },
             {
                 "info": {"id": "msg_c2", "role": "assistant"},
-                "parts": [{"type": "text", "text": "再检查 state"}],
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "state store 已经写入 session_state，但 stdio 和 HTTP 后端读取到的状态快照不一致。",
+                    }
+                ],
             },
             {
                 "info": {"id": "msg_c3", "role": "assistant"},
-                "parts": [{"type": "text", "text": "然后看 search"}],
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "search_context 可以返回结果，但运行时 belief memory 仍然缺少当前项目的稳定约束。",
+                    }
+                ],
             },
             {
                 "info": {"id": "msg_c4", "role": "assistant"},
-                "parts": [{"type": "text", "text": "最后检查结果"}],
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "最终结论是 OpenCode 当前会话还连着旧 stdio MCP，所以需要统一到 HTTP bridge。",
+                    }
+                ],
             },
         ],
         reason="idle",
@@ -1309,8 +1472,8 @@ def test_flush_session_compacts_old_working_session_messages_into_summary():
         for item in result["results"]
         if item.get("memory_tier") == "working_session"
     ]
-    assert len(current_work_items) == 2
-    assert any(item.get("working_summary") for item in current_work_items)
+    assert len(current_work_items) == 1
+    assert current_work_items[0].get("working_summary") is True
 
 
 def test_mcp_list_drawers_current_only_excludes_invalidated_memories():
@@ -1418,19 +1581,39 @@ def test_debug_status_reports_state_and_runtime_metadata():
         [
             {
                 "info": {"id": "msg_stat_1", "role": "assistant"},
-                "parts": [{"type": "text", "text": "先检查 bridge"}],
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "bridge 健康检查返回 200，但是当前会话没有拿到 belief_facts 表里的最新事实。",
+                    }
+                ],
             },
             {
                 "info": {"id": "msg_stat_2", "role": "assistant"},
-                "parts": [{"type": "text", "text": "再检查 state"}],
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "state store 已经写入 session_state，但 stdio 和 HTTP 后端读取到的状态快照不一致。",
+                    }
+                ],
             },
             {
                 "info": {"id": "msg_stat_3", "role": "assistant"},
-                "parts": [{"type": "text", "text": "然后看 search"}],
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "search_context 可以返回结果，但运行时 belief memory 仍然缺少当前项目的稳定约束。",
+                    }
+                ],
             },
             {
                 "info": {"id": "msg_stat_4", "role": "assistant"},
-                "parts": [{"type": "text", "text": "最后检查结果"}],
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "最终结论是 OpenCode 当前会话还连着旧 stdio MCP，所以需要统一到 HTTP bridge。",
+                    }
+                ],
             },
         ],
         reason="idle",
@@ -1490,6 +1673,11 @@ def test_debug_status_reports_state_and_runtime_metadata():
     assert payload["last_compaction_session_id"] == "ses_demo"
     assert payload["last_compaction_compacted_count"] >= 1
     assert payload["last_compaction_summary_drawer_id"] is not None
+    assert payload["maintenance_summary"]["stale_belief_count"] >= 0
+    assert payload["maintenance_summary"]["stale_gene_count"] >= 0
+    assert payload["maintenance_summary"]["stale_capsule_count"] >= 0
+    assert payload["maintenance_summary"]["revision_runs"] >= 0
+    assert payload["maintenance_summary"]["last_revision_at"] is None
 
 
 def test_search_context_prioritizes_session_directory_wing_then_global():

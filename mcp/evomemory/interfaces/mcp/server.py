@@ -213,6 +213,14 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
     def evomemory_run_revision(min_confidence: float = 0.5) -> dict[str, Any]:
         return core.evomemory_run_revision(min_confidence=min_confidence)
 
+    @server.tool(name="evomemory_reconcile_governance")
+    def evomemory_reconcile_governance() -> dict[str, Any]:
+        return core.evomemory_reconcile_governance()
+
+    @server.tool(name="evomemory_maintenance_summary")
+    def evomemory_maintenance_summary() -> dict[str, Any]:
+        return core.maintenance_summary()
+
     @server.tool(name="evomemory_export_snapshot")
     def evomemory_export_snapshot(limit: int = 20) -> dict[str, Any]:
         return core.evomemory_export_snapshot(limit=limit)
@@ -230,6 +238,12 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
     )
     async def debug_status_route(_request: Request):
         return JSONResponse(core.debug_status())
+
+    @server.custom_route(
+        "/internal/debug/maintenance", methods=["GET"], include_in_schema=False
+    )
+    async def debug_maintenance_route(_request: Request):
+        return JSONResponse(core.maintenance_summary())
 
     @server.custom_route(
         "/internal/session/start", methods=["POST"], include_in_schema=False

@@ -60,9 +60,7 @@ export function buildDirectBridgeLaunch(config = {}, env = process.env) {
   const bridgeUrl = new URL(config.bridgeBaseUrl ?? 'http://127.0.0.1:8765')
   const sourceRoot = path.join(home, '.config', 'opencode', 'mcp')
   const palacePath =
-    env.EVOMEMORY_PALACE_PATH ||
-    env.MEMPALACE_PALACE_PATH ||
-    path.join(home, '.evomemory', 'palace')
+    env.EVOMEMORY_PALACE_PATH || path.join(home, '.evomemory', 'palace')
   const defaultPython = (() => {
     const candidates = [
       path.join(home, '.local', 'opt', 'evomemory-opencode', 'venv', 'bin', 'python'),
@@ -87,7 +85,6 @@ export function buildDirectBridgeLaunch(config = {}, env = process.env) {
     cmd: directBridgeCommand,
     env: {
       EVOMEMORY_PALACE_PATH: palacePath,
-      MEMPALACE_PALACE_PATH: palacePath,
       PYTHONPATH: env.PYTHONPATH
         ? [
             ...env.PYTHONPATH.split(path.delimiter).filter(Boolean),

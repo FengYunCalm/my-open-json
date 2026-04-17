@@ -17,6 +17,7 @@ class ContextQueryService:
         payload.update(self.core.state_store.summary())
         payload.update(self.core.repository.memory_stats())
         payload.update(self.core.runtime)
+        payload["maintenance_summary"] = self.core.maintenance_summary()
         return payload
 
     def search_context(

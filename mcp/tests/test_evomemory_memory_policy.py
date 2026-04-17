@@ -10,6 +10,7 @@ from evomemory.domain.memory_policy import (
     classify_memory_tier,
     derive_memory_key,
     derive_memory_value,
+    should_skip_memory_capture,
 )
 
 
@@ -31,6 +32,38 @@ def test_classify_memory_tier_detects_project_constraints():
     assert (
         classify_memory_tier("user", "这个项目里不要自动提交 git commit")
         == "project_memory"
+    )
+
+
+def test_classify_memory_tier_does_not_promote_assistant_project_summaries():
+    assert (
+        classify_memory_tier(
+            "assistant",
+            "这个项目里不要自动提交 git commit，未经确认不要修改代码，修改后都要跑测试",
+        )
+        == "working_session"
+    )
+
+
+def test_should_skip_memory_capture_ignores_long_assistant_progress_updates():
+    assert (
+        should_skip_memory_capture(
+            "assistant",
+            "我会先检查 bridge 和 state store 的差异，再对一下当前会话的连接链路。",
+            "working_session",
+        )
+        is True
+    )
+
+
+def test_should_skip_memory_capture_keeps_substantive_assistant_analysis():
+    assert (
+        should_skip_memory_capture(
+            "assistant",
+            "我检查了 bridge 和 state store，根因是 stdio 与 HTTP 双链路同时写同一套状态文件，导致当前会话和后台 bridge 的视图不一致。",
+            "working_session",
+        )
+        is False
     )
 
 

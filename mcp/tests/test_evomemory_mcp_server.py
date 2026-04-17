@@ -226,6 +226,7 @@ class FakeCore:
                 "capsule_count": 0,
                 "event_count": 0,
             },
+            "maintenance_summary": self.maintenance_summary(),
         }
 
     def evomemory_query_beliefs(
@@ -343,6 +344,41 @@ class FakeCore:
         )
         return {"revised_count": 0, "revised_beliefs": []}
 
+    def evomemory_reconcile_governance(self):
+        self.calls.append(("evomemory_reconcile_governance", {}))
+        return {
+            "reconciled_gene_count": 0,
+            "reconciled_capsule_count": 0,
+            "genes": [],
+            "capsules": [],
+        }
+
+    def maintenance_summary(self):
+        self.calls.append(("maintenance_summary", {}))
+        return {
+            "plane": "maintenance",
+            "service": "evomemory",
+            "revision_runs": 0,
+            "reconcile_runs": 0,
+            "revised_beliefs": 0,
+            "revised_context_memories": 0,
+            "reconciled_stale_genes": 0,
+            "reconciled_stale_capsules": 0,
+            "stale_belief_count": 0,
+            "stale_gene_count": 0,
+            "stale_capsule_count": 0,
+            "updated_at": None,
+            "last_revision_at": None,
+            "last_revision_revised_count": 0,
+            "last_revision_invalidated_context_count": 0,
+            "last_revision_reconciled_gene_count": 0,
+            "last_revision_reconciled_capsule_count": 0,
+            "last_reconcile_at": None,
+            "last_reconcile_stale_belief_count": 0,
+            "last_reconcile_gene_count": 0,
+            "last_reconcile_capsule_count": 0,
+        }
+
     def evomemory_export_snapshot(self, limit=20):
         self.calls.append(("evomemory_export_snapshot", {"limit": limit}))
         return {
@@ -420,6 +456,20 @@ def test_internal_debug_status_route_returns_runtime_metadata():
         payload["recent_active_memory_keys"][0]["memory_key"]
         == "code_change_permission"
     )
+
+
+def test_internal_debug_maintenance_route_returns_maintenance_summary():
+    client = TestClient(create_app(FakeCore()))
+
+    response = client.get("/internal/debug/maintenance")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["plane"] == "maintenance"
+    assert payload["service"] == "evomemory"
+    assert payload["updated_at"] is None
+    assert payload["stale_belief_count"] == 0
+    assert payload["revision_runs"] == 0
 
 
 def test_mcp_endpoint_accepts_stale_session_header_in_stateless_mode():
@@ -669,7 +719,7 @@ def test_mcp_forwards_revision_runs_for_unified_queries():
         assert core.calls[0][1]["min_confidence"] == 0.5
 
 
-def test_mcp_forwards_snapshot_exports_for_unified_queries():
+def test_mcp_forwards_governance_reconcile_runs():
     core = FakeCore()
     with TestClient(create_app(core), base_url="http://127.0.0.1:8765") as client:
         response = client.post(
@@ -677,6 +727,70 @@ def test_mcp_forwards_snapshot_exports_for_unified_queries():
             json={
                 "jsonrpc": "2.0",
                 "id": 15,
+                "method": "tools/call",
+                "params": {
+                    "name": "evomemory_reconcile_governance",
+                    "arguments": {},
+                },
+            },
+            headers={"Accept": "application/json, text/event-stream"},
+        )
+
+        assert response.status_code == 200
+        assert core.calls[0][0] == "evomemory_reconcile_governance"
+
+
+def test_mcp_forwards_maintenance_summary_runs():
+    core = FakeCore()
+    with TestClient(create_app(core), base_url="http://127.0.0.1:8765") as client:
+        response = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 16,
+                "method": "tools/call",
+                "params": {
+                    "name": "evomemory_maintenance_summary",
+                    "arguments": {},
+                },
+            },
+            headers={"Accept": "application/json, text/event-stream"},
+        )
+
+        assert response.status_code == 200
+        assert core.calls[0][0] == "maintenance_summary"
+
+
+def test_mcp_forwards_status_with_maintenance_summary():
+    core = FakeCore()
+    with TestClient(create_app(core), base_url="http://127.0.0.1:8765") as client:
+        response = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 17,
+                "method": "tools/call",
+                "params": {
+                    "name": "evomemory_status",
+                    "arguments": {},
+                },
+            },
+            headers={"Accept": "application/json, text/event-stream"},
+        )
+
+        assert response.status_code == 200
+        assert core.calls[0][0] == "evomemory_status"
+        assert core.calls[1][0] == "maintenance_summary"
+
+
+def test_mcp_forwards_snapshot_exports_for_unified_queries():
+    core = FakeCore()
+    with TestClient(create_app(core), base_url="http://127.0.0.1:8765") as client:
+        response = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 18,
                 "method": "tools/call",
                 "params": {
                     "name": "evomemory_export_snapshot",
@@ -700,7 +814,7 @@ def test_mcp_forwards_benchmark_runs_for_unified_queries():
             "/mcp",
             json={
                 "jsonrpc": "2.0",
-                "id": 16,
+                "id": 19,
                 "method": "tools/call",
                 "params": {
                     "name": "evomemory_run_benchmark",

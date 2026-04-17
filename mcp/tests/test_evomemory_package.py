@@ -232,6 +232,8 @@ def test_bridge_core_exposes_evomemory_unified_query_surface():
     assert status["context"]["service"] == "evomemory-bridge"
     assert status["belief"]["plane"] == "belief"
     assert status["governance"]["plane"] == "governance"
+    assert status["maintenance_summary"]["plane"] == "maintenance"
+    assert status["maintenance_summary"]["service"] == "evomemory"
     assert core.evomemory_query_beliefs()["facts"] == []
     assert core.evomemory_query_genes()["genes"] == []
     assert core.evomemory_query_capsules()["capsules"] == []
@@ -315,7 +317,7 @@ def test_memory_promoter_promotes_beliefs_and_governance_assets():
     assert {item["action"] for item in result["events"]} >= {"promote"}
 
 
-def test_flush_session_promotes_memories_into_belief_plane():
+def test_flush_session_requires_reaffirmation_before_promoting_memories_into_belief_plane():
     import importlib.util
 
     from evomemory.context.bridge import BridgeCore, BridgeConfig
@@ -337,6 +339,36 @@ def test_flush_session_promotes_memories_into_belief_plane():
                 "info": {"id": "msg_proj", "role": "user"},
                 "parts": [
                     {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                ],
+            },
+        ],
+        reason="idle",
+    )
+    first_pass_beliefs = core.evomemory_query_beliefs(current_only=True, limit=10)
+    assert first_pass_beliefs["count"] == 0
+
+    core.flush_session(
+        "ses_belief",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_pref", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_proj", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                ],
+            },
+            {
+                "info": {"id": "msg_pref_reaffirm", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_proj_reaffirm", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里还是不要自动提交 git commit"}
                 ],
             },
         ],
@@ -387,6 +419,10 @@ def test_reaffirming_current_belief_updates_metadata_without_creating_new_fact()
             }
         ],
         reason="idle",
+    )
+    assert (
+        core.evomemory_query_beliefs(scope="user", key="response_language")["count"]
+        == 0
     )
     core.flush_session(
         "ses_belief_meta",
@@ -444,11 +480,39 @@ def test_belief_query_supports_min_confidence_filter():
         ],
         reason="idle",
     )
+    core.flush_session(
+        "ses_belief_filter",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_filter_4", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            },
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_belief_filter",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_filter_5", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里还是不要自动提交 git commit"}
+                ],
+            },
+            {
+                "info": {"id": "msg_filter_6", "role": "user"},
+                "parts": [{"type": "text", "text": "请继续用中文回复"}],
+            },
+        ],
+        reason="idle",
+    )
 
     all_beliefs = core.evomemory_query_beliefs(current_only=True, limit=10)
     strong_beliefs = core.evomemory_query_beliefs(
         current_only=True,
-        min_confidence=0.75,
+        min_confidence=0.9,
         limit=10,
     )
 
@@ -481,12 +545,30 @@ def test_conflicting_beliefs_supersede_previous_fact_and_record_events():
         "/home/mechrevo/.config/opencode",
         [
             {
-                "info": {"id": "msg_pref_1", "role": "user"},
-                "parts": [{"type": "text", "text": "以后都用中文回复"}],
-            },
-            {
                 "info": {"id": "msg_pref_2", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            },
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_conflict",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_pref_3", "role": "user"},
                 "parts": [{"type": "text", "text": "以后都用英文回复"}],
+            },
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_conflict",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_pref_4", "role": "user"},
+                "parts": [{"type": "text", "text": "默认以后都用英文回复"}],
             },
         ],
         reason="idle",
@@ -528,10 +610,39 @@ def test_beliefs_and_events_persist_across_bridge_instances():
                 "info": {"id": "msg_pref_1", "role": "user"},
                 "parts": [{"type": "text", "text": "以后都用中文回复"}],
             },
+        ],
+        reason="idle",
+    )
+    core_a.flush_session(
+        "ses_persist",
+        "/home/mechrevo/.config/opencode",
+        [
             {
                 "info": {"id": "msg_pref_2", "role": "user"},
-                "parts": [{"type": "text", "text": "以后都用英文回复"}],
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
             },
+        ],
+        reason="idle",
+    )
+    core_a.flush_session(
+        "ses_persist",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_pref_3", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用英文回复"}],
+            }
+        ],
+        reason="idle",
+    )
+    core_a.flush_session(
+        "ses_persist",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_pref_4", "role": "user"},
+                "parts": [{"type": "text", "text": "默认以后都用英文回复"}],
+            }
         ],
         reason="idle",
     )
@@ -576,6 +687,23 @@ def test_search_context_includes_beliefs_and_governance_assets():
                 "info": {"id": "msg_proj", "role": "user"},
                 "parts": [
                     {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                ],
+            },
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_runtime",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_pref_again", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_proj_again", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里还是不要自动提交 git commit"}
                 ],
             },
         ],
@@ -628,19 +756,37 @@ def test_evaluation_summary_tracks_promotions_supersedes_and_enriched_searches()
         "/home/mechrevo/.config/opencode",
         [
             {
-                "info": {"id": "msg_eval_1", "role": "user"},
-                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+                "info": {"id": "msg_eval_3", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
             },
             {
-                "info": {"id": "msg_eval_2", "role": "user"},
+                "info": {"id": "msg_eval_4", "role": "user"},
                 "parts": [
-                    {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                    {"type": "text", "text": "这个项目里还是不要自动提交 git commit"}
                 ],
             },
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_eval",
+        "/home/mechrevo/.config/opencode",
+        [
             {
-                "info": {"id": "msg_eval_3", "role": "user"},
+                "info": {"id": "msg_eval_5", "role": "user"},
                 "parts": [{"type": "text", "text": "以后都用英文回复"}],
             },
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_eval",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_eval_6", "role": "user"},
+                "parts": [{"type": "text", "text": "默认以后都用英文回复"}],
+            }
         ],
         reason="idle",
     )
@@ -675,6 +821,19 @@ def test_feedback_updates_governance_scores_and_evaluation_metrics():
                 "info": {"id": "msg_feedback_1", "role": "user"},
                 "parts": [
                     {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                ],
+            }
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_feedback",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_feedback_2", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里还是不要自动提交 git commit"}
                 ],
             }
         ],
@@ -735,6 +894,19 @@ def test_feedback_policy_is_signal_specific_and_feedback_log_is_queryable():
                 "info": {"id": "msg_feedback_policy_1", "role": "user"},
                 "parts": [
                     {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                ],
+            }
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_feedback_policy",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_feedback_policy_2", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里还是不要自动提交 git commit"}
                 ],
             }
         ],
@@ -803,6 +975,23 @@ def test_export_snapshot_returns_all_planes():
         ],
         reason="idle",
     )
+    core.flush_session(
+        "ses_snapshot",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_snapshot_3", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_snapshot_4", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里还是不要自动提交 git commit"}
+                ],
+            },
+        ],
+        reason="idle",
+    )
     core.search_context(
         "git commit",
         "/home/mechrevo/.config/opencode",
@@ -817,6 +1006,8 @@ def test_export_snapshot_returns_all_planes():
     assert snapshot["governance"]["gene_count"] >= 2
     assert snapshot["governance"]["capsule_count"] >= 1
     assert snapshot["evaluation"]["metrics"]["search_context_calls"] >= 1
+    assert snapshot["maintenance_summary"]["plane"] == "maintenance"
+    assert snapshot["maintenance_summary"]["service"] == "evomemory"
     assert snapshot["feedback"]["count"] == 0
 
 
@@ -839,6 +1030,23 @@ def test_benchmark_runner_scores_snapshot_health():
                 "info": {"id": "msg_benchmark_2", "role": "user"},
                 "parts": [
                     {"type": "text", "text": "这个项目里不要自动提交 git commit"}
+                ],
+            },
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_benchmark",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_benchmark_3", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_benchmark_4", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里还是不要自动提交 git commit"}
                 ],
             },
         ],
@@ -882,6 +1090,17 @@ def test_belief_feedback_updates_confidence_and_audit_log():
             {
                 "info": {"id": "msg_belief_feedback_1", "role": "user"},
                 "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            }
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_belief_feedback",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_belief_feedback_2", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
             }
         ],
         reason="idle",
@@ -944,6 +1163,17 @@ def test_revision_marks_low_confidence_beliefs_stale_and_demotes_assets():
         ],
         reason="idle",
     )
+    core.flush_session(
+        "ses_revision",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_revision_2", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            }
+        ],
+        reason="idle",
+    )
 
     belief = core.evomemory_query_beliefs(
         scope="user", key="response_language", current_only=True, limit=10
@@ -961,7 +1191,7 @@ def test_revision_marks_low_confidence_beliefs_stale_and_demotes_assets():
         signal="correct",
         note="This belief is weak and should be revised.",
     )
-    revision = core.evomemory_run_revision(min_confidence=0.5)
+    revision = core.evomemory_run_revision(min_confidence=0.7)
 
     current_beliefs = core.evomemory_query_beliefs(
         scope="user", key="response_language", current_only=True, limit=10
@@ -992,6 +1222,352 @@ def test_revision_marks_low_confidence_beliefs_stale_and_demotes_assets():
     assert summary["metrics"]["revised_beliefs"] >= 1
 
 
+def test_revision_removes_stale_belief_from_core_memory():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-revision-core-memory-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+    core.start_session("ses_revision_core", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_revision_core",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_revision_core_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            }
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_revision_core",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_revision_core_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_revision_core_2", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            },
+        ],
+        reason="idle",
+    )
+
+    belief = core.evomemory_query_beliefs(
+        scope="user", key="response_language", current_only=True, limit=10
+    )["facts"][0]
+    core.evomemory_record_feedback(
+        target_kind="belief",
+        target_id=belief["id"],
+        signal="correct",
+        note="This belief is weak and should be revised.",
+    )
+    revision = core.evomemory_run_revision(min_confidence=0.7)
+
+    result = core.search_context(
+        "回复",
+        "/home/mechrevo/.config/opencode",
+        session_id="ses_revision_core",
+    )
+
+    assert revision["invalidated_context_count"] == 1
+    assert result["belief_memory_count"] == 0
+    assert all(
+        item.get("memory_key") != "response_language" for item in result["core_memory"]
+    )
+
+
+def test_revision_recovers_from_stale_context_records():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+    import sqlite3
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-revision-recover-"))
+    state_path = temp_dir / "state.sqlite3"
+    backend = PromotionBackend()
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=backend)
+    core.start_session("ses_revision_recover", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_revision_recover",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_recover_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_recover_2", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            },
+        ],
+        reason="idle",
+    )
+
+    belief = core.evomemory_query_beliefs(
+        scope="user", key="response_language", current_only=True, limit=10
+    )["facts"][0]
+    with sqlite3.connect(state_path) as connection:
+        connection.execute(
+            "UPDATE belief_facts SET source_record_id = NULL WHERE id = ?",
+            (belief["id"],),
+        )
+    core.evomemory_record_feedback(
+        target_kind="belief",
+        target_id=belief["id"],
+        signal="correct",
+        note="This belief is weak and should be revised.",
+    )
+    revision = core.evomemory_run_revision(min_confidence=0.7)
+
+    result = core.search_context(
+        "回复",
+        "/home/mechrevo/.config/opencode",
+        session_id="ses_revision_recover",
+    )
+
+    assert revision["invalidated_context_count"] == 1
+    assert revision["revised_count"] == 1
+    assert result["belief_memory_count"] == 0
+    assert all(
+        item.get("memory_key") != "response_language" for item in result["core_memory"]
+    )
+
+
+def test_governance_reconcile_sweeps_stale_assets_back_to_consistent_state():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+    import sqlite3
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-governance-reconcile-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+    core.start_session("ses_gov_reconcile", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_gov_reconcile",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_gov_reconcile_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            }
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_gov_reconcile",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_gov_reconcile_2", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            }
+        ],
+        reason="idle",
+    )
+
+    belief = core.evomemory_query_beliefs(
+        scope="user", key="response_language", current_only=True, limit=10
+    )["facts"][0]
+    core.evomemory_record_feedback(
+        target_kind="belief",
+        target_id=belief["id"],
+        signal="correct",
+        note="This belief is weak and should be revised.",
+    )
+    core.evomemory_run_revision(min_confidence=0.7)
+
+    gene_id = core.evomemory_query_genes(scope="user", stale_only=True, limit=10)[
+        "genes"
+    ][0]["id"]
+    capsule_id = core.evomemory_query_capsules(scope="user", stale_only=True, limit=10)[
+        "capsules"
+    ][0]["id"]
+
+    with sqlite3.connect(state_path) as connection:
+        connection.execute(
+            "UPDATE genes SET is_stale = 0, demoted_at = NULL WHERE id = ?",
+            (gene_id,),
+        )
+        connection.execute(
+            "UPDATE capsules SET is_stale = 0, demoted_at = NULL WHERE id = ?",
+            (capsule_id,),
+        )
+
+    assert any(
+        item["id"] == gene_id
+        for item in core.evomemory_query_genes(
+            scope="user", current_only=True, limit=10
+        )["genes"]
+    )
+    assert any(
+        item["id"] == capsule_id
+        for item in core.evomemory_query_capsules(
+            scope="user", current_only=True, limit=10
+        )["capsules"]
+    )
+
+    reconcile = core.evomemory_reconcile_governance()
+    stale_genes = core.evomemory_query_genes(scope="user", stale_only=True, limit=10)
+    stale_capsules = core.evomemory_query_capsules(
+        scope="user", stale_only=True, limit=10
+    )
+    summary = core.evomemory_evaluation_summary()
+
+    assert reconcile["reconciled_gene_count"] == 1
+    assert reconcile["reconciled_capsule_count"] == 1
+    assert any(item["id"] == gene_id for item in stale_genes["genes"])
+    assert any(item["id"] == capsule_id for item in stale_capsules["capsules"])
+    assert summary["metrics"]["reconciled_stale_genes"] >= 1
+    assert summary["metrics"]["reconciled_stale_capsules"] >= 1
+
+
+def test_revision_reconciles_historical_stale_governance_assets():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+    import sqlite3
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-revision-gov-reconcile-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+    core.start_session("ses_revision_gov_reconcile", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_revision_gov_reconcile",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_revision_gov_reconcile_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            }
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_revision_gov_reconcile",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_revision_gov_reconcile_2", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            }
+        ],
+        reason="idle",
+    )
+
+    belief = core.evomemory_query_beliefs(
+        scope="user", key="response_language", current_only=True, limit=10
+    )["facts"][0]
+    core.evomemory_record_feedback(
+        target_kind="belief",
+        target_id=belief["id"],
+        signal="correct",
+        note="This belief is weak and should be revised.",
+    )
+    first_revision = core.evomemory_run_revision(min_confidence=0.7)
+
+    gene_id = first_revision["demoted_genes"][0]["id"]
+    capsule_id = first_revision["demoted_capsules"][0]["id"]
+    with sqlite3.connect(state_path) as connection:
+        connection.execute(
+            "UPDATE genes SET is_stale = 0, demoted_at = NULL WHERE id = ?",
+            (gene_id,),
+        )
+        connection.execute(
+            "UPDATE capsules SET is_stale = 0, demoted_at = NULL WHERE id = ?",
+            (capsule_id,),
+        )
+
+    revision = core.evomemory_run_revision(min_confidence=0.7)
+    stale_genes = core.evomemory_query_genes(scope="user", stale_only=True, limit=10)
+    stale_capsules = core.evomemory_query_capsules(
+        scope="user", stale_only=True, limit=10
+    )
+
+    assert revision["revised_count"] == 0
+    assert revision["reconciled_gene_count"] == 1
+    assert revision["reconciled_capsule_count"] == 1
+    assert any(item["id"] == gene_id for item in stale_genes["genes"])
+    assert any(item["id"] == capsule_id for item in stale_capsules["capsules"])
+
+
+def test_evaluation_summary_includes_maintenance_snapshot():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-maintenance-summary-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+    core.start_session("ses_maintenance_summary", "/home/mechrevo/.config/opencode")
+    core.flush_session(
+        "ses_maintenance_summary",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_maintenance_summary_1", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用中文回复"}],
+            }
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_maintenance_summary",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_maintenance_summary_2", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            }
+        ],
+        reason="idle",
+    )
+
+    belief = core.evomemory_query_beliefs(
+        scope="user", key="response_language", current_only=True, limit=10
+    )["facts"][0]
+    core.evomemory_record_feedback(
+        target_kind="belief",
+        target_id=belief["id"],
+        signal="correct",
+        note="This belief is weak and should be revised.",
+    )
+    revision = core.evomemory_run_revision(min_confidence=0.7)
+    summary = core.evomemory_evaluation_summary()
+
+    assert summary["maintenance_summary"]["plane"] == "maintenance"
+    assert summary["maintenance_summary"]["service"] == "evomemory"
+    assert summary["maintenance_summary"]["updated_at"] is not None
+    assert summary["maintenance_summary"]["revision_runs"] >= 1
+    assert summary["maintenance_summary"]["revised_beliefs"] >= 1
+    assert summary["maintenance_summary"]["revised_context_memories"] >= 1
+    assert summary["maintenance_summary"]["stale_belief_count"] >= 1
+    assert summary["maintenance_summary"]["stale_gene_count"] >= 1
+    assert summary["maintenance_summary"]["stale_capsule_count"] >= 1
+    assert summary["maintenance_summary"]["last_revision_at"] is not None
+    assert (
+        summary["maintenance_summary"]["last_revision_revised_count"]
+        == revision["revised_count"]
+    )
+
+
+def test_maintenance_summary_exposes_status_and_runtime_fields():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-maintenance-status-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+
+    summary = core.maintenance_summary()
+
+    assert summary["plane"] == "maintenance"
+    assert summary["service"] == "evomemory"
+    assert summary["revision_runs"] == 0
+    assert summary["reconcile_runs"] == 0
+    assert summary["stale_belief_count"] == 0
+    assert summary["stale_gene_count"] == 0
+    assert summary["stale_capsule_count"] == 0
+    assert summary["updated_at"] is None
+    assert summary["last_revision_at"] is None
+    assert summary["last_reconcile_at"] is None
+
+
 def test_governance_scores_and_stale_detection_are_tracked():
     from evomemory.context.bridge import BridgeCore, BridgeConfig
 
@@ -1007,10 +1583,39 @@ def test_governance_scores_and_stale_detection_are_tracked():
                 "info": {"id": "msg_score_1", "role": "user"},
                 "parts": [{"type": "text", "text": "以后都用中文回复"}],
             },
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_score",
+        "/home/mechrevo/.config/opencode",
+        [
             {
                 "info": {"id": "msg_score_2", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            }
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_score",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_score_3", "role": "user"},
                 "parts": [{"type": "text", "text": "以后都用英文回复"}],
-            },
+            }
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_score",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_score_4", "role": "user"},
+                "parts": [{"type": "text", "text": "默认以后都用英文回复"}],
+            }
         ],
         reason="idle",
     )
@@ -1054,14 +1659,49 @@ def test_governance_queries_support_scope_and_stale_filters():
                 "parts": [{"type": "text", "text": "以后都用中文回复"}],
             },
             {
-                "info": {"id": "msg_user_2", "role": "user"},
-                "parts": [{"type": "text", "text": "以后都用英文回复"}],
-            },
-            {
                 "info": {"id": "msg_proj_1", "role": "user"},
                 "parts": [
                     {"type": "text", "text": "这个项目里不要自动提交 git commit"}
                 ],
+            },
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_gov_filter",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_user_2", "role": "user"},
+                "parts": [{"type": "text", "text": "默认也用中文回复"}],
+            },
+            {
+                "info": {"id": "msg_proj_2", "role": "user"},
+                "parts": [
+                    {"type": "text", "text": "这个项目里还是不要自动提交 git commit"}
+                ],
+            },
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_gov_filter",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_user_3", "role": "user"},
+                "parts": [{"type": "text", "text": "以后都用英文回复"}],
+            }
+        ],
+        reason="idle",
+    )
+    core.flush_session(
+        "ses_gov_filter",
+        "/home/mechrevo/.config/opencode",
+        [
+            {
+                "info": {"id": "msg_user_4", "role": "user"},
+                "parts": [{"type": "text", "text": "默认以后都用英文回复"}],
             },
         ],
         reason="idle",

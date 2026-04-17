@@ -40,6 +40,7 @@ from evomemory.domain.memory_policy import (
     classify_memory_tier,
     derive_memory_key,
     derive_memory_value,
+    should_skip_memory_capture,
 )
 from evomemory.context.query_service import ContextQueryService
 from evomemory.context.repository import ContextRepository
@@ -67,12 +68,8 @@ VALID_MEMORY_TIERS = {"working_session", "user_preference", "project_memory"}
 PREVIEW_CHARS = 200
 FETCH_BATCH_SIZE = 1000
 EVOMEMORY_HOME_DIRNAME = ".evomemory"
-LEGACY_HOME_DIRNAME = ".mempalace"
 EVOMEMORY_PALACE_ENV = "EVOMEMORY_PALACE_PATH"
-LEGACY_PALACE_ENV = "MEMPALACE_PALACE_PATH"
 EVOMEMORY_COLLECTION_NAME = "evomemory_drawers"
-LEGACY_COLLECTION_NAME = "mempalace_drawers"
-LEGACY_STATE_FILENAME = "mempalace_bridge_state.json"
 EVOMEMORY_STATE_FILENAME = "evomemory_bridge_state.sqlite3"
 
 
@@ -80,42 +77,9 @@ def _default_evomemory_home(home: Path | None = None) -> Path:
     return (home or Path.home()) / EVOMEMORY_HOME_DIRNAME
 
 
-def _default_legacy_home(home: Path | None = None) -> Path:
-    return (home or Path.home()) / LEGACY_HOME_DIRNAME
-
-
-def _ensure_legacy_symlink(legacy_path: Path, target_path: Path) -> None:
-    if legacy_path.is_symlink():
-        if legacy_path.resolve() == target_path.resolve():
-            return
-        legacy_path.unlink()
-    elif legacy_path.exists():
-        return
-    legacy_path.parent.mkdir(parents=True, exist_ok=True)
-    legacy_path.symlink_to(target_path, target_is_directory=target_path.is_dir())
-
-
-def _migrate_legacy_path(legacy_path: Path, resolved: Path) -> Path:
-    resolved.parent.mkdir(parents=True, exist_ok=True)
-    if resolved.exists():
-        _ensure_legacy_symlink(legacy_path, resolved)
-        return resolved
-    if legacy_path.exists() and not legacy_path.is_symlink():
-        legacy_path.replace(resolved)
-        _ensure_legacy_symlink(legacy_path, resolved)
-    return resolved
-
-
 def _resolve_state_path(state_path: Path) -> Path:
     resolved = Path(state_path)
     resolved.parent.mkdir(parents=True, exist_ok=True)
-    legacy_state_path = resolved.with_name(LEGACY_STATE_FILENAME)
-    if (
-        resolved.name == EVOMEMORY_STATE_FILENAME
-        and not resolved.exists()
-        and legacy_state_path.exists()
-    ):
-        legacy_state_path.replace(resolved)
     return resolved
 
 
@@ -135,24 +99,14 @@ def _resolve_palace_path(
         resolved = Path(env[EVOMEMORY_PALACE_ENV])
         resolved.parent.mkdir(parents=True, exist_ok=True)
         return resolved
-    if env.get(LEGACY_PALACE_ENV):
-        resolved = Path(env[LEGACY_PALACE_ENV])
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-        return resolved
-    return _migrate_legacy_path(
-        _default_legacy_home(home) / "palace",
-        _default_evomemory_home(home) / "palace",
-    )
+    resolved = _default_evomemory_home(home) / "palace"
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    return resolved
 
 
 def _resolve_wing_config_path(
     wing_config_path: Path, *, home: Path | None = None
 ) -> Path:
-    home = home or Path.home()
-    legacy_config_path = _default_legacy_home(home) / "wing_config.json"
-    default_config_path = _default_evomemory_home(home) / "wing_config.json"
-    if wing_config_path == default_config_path:
-        return _migrate_legacy_path(legacy_config_path, wing_config_path)
     wing_config_path.parent.mkdir(parents=True, exist_ok=True)
     return wing_config_path
 
@@ -201,6 +155,19 @@ def _summary_sort_key(item: dict[str, Any]) -> tuple[int, str]:
         _safe_order(metadata.get("session_order")) or 0,
         item.get("message_id") or "",
     )
+
+
+def _summary_points_from_text(text: str) -> list[str]:
+    points = []
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip()
+        if not line or line == "Working session summary:":
+            continue
+        if line.startswith("- "):
+            line = line[2:].strip()
+        if line:
+            points.append(line)
+    return points
 
 
 def _core_memory_sort_key(item: dict[str, Any]) -> tuple[int, int, float, str]:
@@ -300,14 +267,10 @@ class EvoMemoryBackend:
                 "The EvoMemory backend requires the underlying memory package. Install it before using the live backend."
             )
         self.bridge_config = config
-        self.library_config = MempalaceConfig()
         if config.palace_path:
             os.environ[EVOMEMORY_PALACE_ENV] = config.palace_path
-            os.environ[LEGACY_PALACE_ENV] = config.palace_path
-        self.palace_path = config.palace_path or self.library_config.palace_path
-        self.collection_name = (
-            config.collection_name or self.library_config.collection_name
-        )
+        self.palace_path = config.palace_path
+        self.collection_name = config.collection_name or EVOMEMORY_COLLECTION_NAME
         self._client: chromadb.PersistentClient | None = None
         self._collection = None
         self._kg = KnowledgeGraph(
@@ -331,43 +294,10 @@ class EvoMemoryBackend:
         try:
             self._collection = client.get_collection(self.collection_name)
         except Exception:
-            if not create and self.collection_name == LEGACY_COLLECTION_NAME:
+            if not create:
                 raise
             self._collection = client.get_or_create_collection(self.collection_name)
-        if self.collection_name != LEGACY_COLLECTION_NAME:
-            self._migrate_legacy_collection(client, self._collection)
         return self._collection
-
-    def _collection_has_rows(self, collection: Any) -> bool:
-        try:
-            rows = collection.get(include=["documents", "metadatas"], limit=1, offset=0)
-        except TypeError:
-            rows = collection.get(include=["documents", "metadatas"])
-        return bool(rows.get("ids", []))
-
-    def _migrate_legacy_collection(self, client: Any, target_collection: Any) -> None:
-        try:
-            legacy_collection = client.get_collection(LEGACY_COLLECTION_NAME)
-        except Exception:
-            return
-        if self._collection_has_rows(target_collection):
-            return
-        offset = 0
-        while True:
-            batch = legacy_collection.get(
-                include=["documents", "metadatas"],
-                limit=FETCH_BATCH_SIZE,
-                offset=offset,
-            )
-            ids = batch.get("ids", [])
-            if not ids:
-                break
-            target_collection.upsert(
-                ids=ids,
-                documents=batch.get("documents", []),
-                metadatas=batch.get("metadatas", []),
-            )
-            offset += len(ids)
 
     def _make_where(
         self,
@@ -448,7 +378,12 @@ class EvoMemoryBackend:
             "message_id": metadata.get("message_id"),
             "role": metadata.get("role"),
             "memory_tier": metadata.get("memory_tier"),
+            "memory_key": metadata.get("memory_key"),
+            "memory_value": metadata.get("memory_value"),
             "dedupe_hash": metadata.get("dedupe_hash"),
+            "valid_from": metadata.get("valid_from"),
+            "valid_to": metadata.get("valid_to"),
+            "working_summary": metadata.get("working_summary") is True,
             "filed_at": metadata.get("filed_at"),
             "distance": round(float(distance), 4) if distance is not None else None,
             "similarity": _safe_similarity(distance),
@@ -970,6 +905,7 @@ class BridgeCore:
         self.classify_memory_tier = classify_memory_tier
         self.derive_memory_key = derive_memory_key
         self.derive_memory_value = derive_memory_value
+        self.should_skip_memory_capture = should_skip_memory_capture
         self.working_session_dedupe_hash = _working_session_dedupe_hash
         self.sanitize_optional_name = _sanitize_optional_name
         self.sanitize_optional_role = _sanitize_optional_role
@@ -1268,10 +1204,19 @@ class BridgeCore:
 
     def _build_working_session_summary_content(self, rows: list[dict[str, Any]]) -> str:
         lines = ["Working session summary:"]
+        seen = set()
         for row in sorted(rows, key=_summary_sort_key):
-            preview = _preview_text(row.get("text", ""), max_chars=120)
-            if preview:
-                lines.append(f"- {preview}")
+            points = (
+                _summary_points_from_text(row.get("text", ""))
+                if row.get("working_summary")
+                else [_preview_text(row.get("text", ""), max_chars=120)]
+            )
+            for point in points:
+                normalized = " ".join((point or "").split())
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                lines.append(f"- {point}")
         return "\n".join(lines)
 
     def _compact_working_session(
@@ -1340,6 +1285,11 @@ class BridgeCore:
                 "summary_count": len(rows_to_compact),
             },
         )
+        self.evaluation_service.increment("working_session_compactions")
+        self.evaluation_service.increment(
+            "compacted_working_session_messages", len(rows_to_compact)
+        )
+        self.evaluation_service.increment("saved_working_session_summaries")
         self.runtime["last_compaction_at"] = valid_to
         self.runtime["last_compaction_session_id"] = session_id
         self.runtime["last_compaction_compacted_count"] = len(rows_to_compact)
@@ -1484,6 +1434,66 @@ class BridgeCore:
             "belief": self.belief_service.status(),
             "governance": self.governance_service.status(),
             "evaluation": self.evaluation_service.summary(),
+            "maintenance_summary": self.maintenance_summary(),
+        }
+
+    def maintenance_summary(self) -> dict[str, Any]:
+        belief_status = self.belief_service.status()
+        governance_status = self.governance_service.status()
+        metrics = self.evaluation_service.summary().get("metrics", {})
+        updated_at = max(
+            [
+                timestamp
+                for timestamp in [
+                    self.runtime.get("last_revision_at"),
+                    self.runtime.get("last_reconcile_at"),
+                ]
+                if timestamp
+            ],
+            default=None,
+        )
+        return {
+            "plane": "maintenance",
+            "service": "evomemory",
+            "revision_runs": int(metrics.get("revision_runs") or 0),
+            "reconcile_runs": int(metrics.get("reconcile_runs") or 0),
+            "revised_beliefs": int(metrics.get("revised_beliefs") or 0),
+            "revised_context_memories": int(
+                metrics.get("revised_context_memories") or 0
+            ),
+            "reconciled_stale_genes": int(metrics.get("reconciled_stale_genes") or 0),
+            "reconciled_stale_capsules": int(
+                metrics.get("reconciled_stale_capsules") or 0
+            ),
+            "stale_belief_count": int(belief_status.get("historical_fact_count") or 0),
+            "stale_gene_count": int(governance_status.get("stale_gene_count") or 0),
+            "stale_capsule_count": int(
+                governance_status.get("stale_capsule_count") or 0
+            ),
+            "updated_at": updated_at,
+            "last_revision_at": self.runtime.get("last_revision_at"),
+            "last_revision_revised_count": int(
+                self.runtime.get("last_revision_revised_count") or 0
+            ),
+            "last_revision_invalidated_context_count": int(
+                self.runtime.get("last_revision_invalidated_context_count") or 0
+            ),
+            "last_revision_reconciled_gene_count": int(
+                self.runtime.get("last_revision_reconciled_gene_count") or 0
+            ),
+            "last_revision_reconciled_capsule_count": int(
+                self.runtime.get("last_revision_reconciled_capsule_count") or 0
+            ),
+            "last_reconcile_at": self.runtime.get("last_reconcile_at"),
+            "last_reconcile_stale_belief_count": int(
+                self.runtime.get("last_reconcile_stale_belief_count") or 0
+            ),
+            "last_reconcile_gene_count": int(
+                self.runtime.get("last_reconcile_gene_count") or 0
+            ),
+            "last_reconcile_capsule_count": int(
+                self.runtime.get("last_reconcile_capsule_count") or 0
+            ),
         }
 
     def evomemory_query_beliefs(
@@ -1540,7 +1550,10 @@ class BridgeCore:
         )
 
     def evomemory_evaluation_summary(self) -> dict[str, Any]:
-        return self.evaluation_service.summary()
+        return {
+            **self.evaluation_service.summary(),
+            "maintenance_summary": self.maintenance_summary(),
+        }
 
     def evomemory_list_feedback(
         self,
@@ -1597,10 +1610,104 @@ class BridgeCore:
             "record": feedback_record,
         }
 
+    def _reconcile_governance_assets(
+        self, stale_belief_ids: list[str], *, rationale: str
+    ) -> dict[str, Any]:
+        reconcile_at = datetime.now(timezone.utc).isoformat()
+        reconciled = self.governance_service.reconcile_stale_assets(stale_belief_ids)
+        for gene in reconciled.get("genes", []):
+            self.evaluation_service.increment("reconciled_stale_genes")
+            self.governance_service.record_event(
+                action="reconcile",
+                target_kind="gene",
+                target_id=gene["id"],
+                rationale=rationale,
+            )
+        for capsule in reconciled.get("capsules", []):
+            self.evaluation_service.increment("reconciled_stale_capsules")
+            self.governance_service.record_event(
+                action="reconcile",
+                target_kind="capsule",
+                target_id=capsule["id"],
+                rationale=rationale,
+            )
+        self.evaluation_service.increment("reconcile_runs")
+        self.runtime["last_reconcile_at"] = reconcile_at
+        self.runtime["last_reconcile_stale_belief_count"] = len(stale_belief_ids)
+        self.runtime["last_reconcile_gene_count"] = len(reconciled.get("genes", []))
+        self.runtime["last_reconcile_capsule_count"] = len(
+            reconciled.get("capsules", [])
+        )
+        return {
+            "stale_belief_count": len(stale_belief_ids),
+            "reconciled_gene_count": len(reconciled.get("genes", [])),
+            "reconciled_capsule_count": len(reconciled.get("capsules", [])),
+            "genes": reconciled.get("genes", []),
+            "capsules": reconciled.get("capsules", []),
+        }
+
     def evomemory_run_revision(self, *, min_confidence: float = 0.5) -> dict[str, Any]:
+        revision_at = datetime.now(timezone.utc).isoformat()
         result = self.belief_service.run_revision(min_confidence=min_confidence)
         revised_ids = [item["id"] for item in result["revised_beliefs"]]
+        invalidated_context_count = 0
+        stale_records = self.belief_service.stale_source_records()
+        stale_belief_ids = list(
+            dict.fromkeys(
+                item.get("belief_id") for item in stale_records if item.get("belief_id")
+            )
+        )
+        stale_context_valid_to_by_drawer: dict[str, str] = {}
+        for stale_record in stale_records:
+            valid_to = (
+                stale_record.get("valid_to") or datetime.now(timezone.utc).isoformat()
+            )
+            drawer_ids = []
+            if stale_record.get("source_record_id"):
+                drawer_ids = [stale_record["source_record_id"]]
+            else:
+                candidates = self.repository.query_drawers(
+                    query=None,
+                    session_id=stale_record.get("source_session"),
+                    memory_tier=stale_record.get("memory_tier"),
+                    current_only=True,
+                    limit=100,
+                )
+                exact_matches = [
+                    row.get("drawer_id")
+                    for row in candidates
+                    if row.get("drawer_id")
+                    and row.get("message_id") == stale_record.get("source_message_id")
+                ]
+                if exact_matches:
+                    drawer_ids = exact_matches
+                else:
+                    drawer_ids = [
+                        row.get("drawer_id")
+                        for row in candidates
+                        if row.get("drawer_id")
+                        and row.get("memory_key") == stale_record.get("key")
+                        and row.get("memory_value") == stale_record.get("value")
+                        and (row.get("valid_from") or row.get("filed_at") or "")
+                        <= valid_to
+                    ]
+            for drawer_id in drawer_ids:
+                existing_valid_to = stale_context_valid_to_by_drawer.get(drawer_id)
+                if existing_valid_to is None or valid_to > existing_valid_to:
+                    stale_context_valid_to_by_drawer[drawer_id] = valid_to
+        grouped_drawer_ids: dict[str, list[str]] = {}
+        for drawer_id, valid_to in stale_context_valid_to_by_drawer.items():
+            grouped_drawer_ids.setdefault(valid_to, []).append(drawer_id)
+        for valid_to, drawer_ids in grouped_drawer_ids.items():
+            invalidated_context_count += self.repository.invalidate_drawers(
+                drawer_ids=drawer_ids,
+                valid_to=valid_to,
+            )
         demoted = self.governance_service.demote_assets_for_revised_beliefs(revised_ids)
+        reconciled = self._reconcile_governance_assets(
+            stale_belief_ids,
+            rationale="reconciled stale governance asset during revision maintenance",
+        )
         if result["revised_count"]:
             self.evaluation_service.increment("revision_runs")
             self.evaluation_service.increment(
@@ -1630,11 +1737,44 @@ class BridgeCore:
                     target_id=capsule["id"],
                     rationale="demoted by revision sweep",
                 )
+        if invalidated_context_count:
+            self.evaluation_service.increment(
+                "revised_context_memories", invalidated_context_count
+            )
+        self.runtime["last_revision_at"] = revision_at
+        self.runtime["last_revision_revised_count"] = result["revised_count"]
+        self.runtime["last_revision_invalidated_context_count"] = (
+            invalidated_context_count
+        )
+        self.runtime["last_revision_reconciled_gene_count"] = reconciled[
+            "reconciled_gene_count"
+        ]
+        self.runtime["last_revision_reconciled_capsule_count"] = reconciled[
+            "reconciled_capsule_count"
+        ]
         return {
             **result,
+            "invalidated_context_count": invalidated_context_count,
             "demoted_genes": demoted.get("genes", []),
             "demoted_capsules": demoted.get("capsules", []),
+            "reconciled_gene_count": reconciled["reconciled_gene_count"],
+            "reconciled_capsule_count": reconciled["reconciled_capsule_count"],
+            "reconciled_genes": reconciled["genes"],
+            "reconciled_capsules": reconciled["capsules"],
         }
+
+    def evomemory_reconcile_governance(self) -> dict[str, Any]:
+        stale_belief_ids = list(
+            dict.fromkeys(
+                item.get("belief_id")
+                for item in self.belief_service.stale_source_records()
+                if item.get("belief_id")
+            )
+        )
+        return self._reconcile_governance_assets(
+            stale_belief_ids,
+            rationale="reconciled stale governance asset from historical belief state",
+        )
 
     def evomemory_export_snapshot(self, *, limit: int = 20) -> dict[str, Any]:
         normalized_limit = self._normalize_limit(limit, default=20)
@@ -1656,6 +1796,7 @@ class BridgeCore:
                 "events": events["events"],
             },
             "evaluation": self.evaluation_service.summary(),
+            "maintenance_summary": self.maintenance_summary(),
             "feedback": feedback,
         }
 

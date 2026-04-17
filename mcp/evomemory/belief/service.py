@@ -134,6 +134,7 @@ class BeliefPlaneService:
         source_message_id: str | None,
         source_record_id: str | None,
         valid_from: str | None = None,
+        initial_source_count: int = 1,
     ) -> dict[str, Any]:
         timestamp = valid_from or datetime.now(timezone.utc).isoformat()
         current_facts = [
@@ -204,12 +205,14 @@ class BeliefPlaneService:
             "source_session": source_session,
             "source_message_id": source_message_id,
             "source_record_id": source_record_id,
-            "source_count": 1,
+            "source_count": max(1, int(initial_source_count or 1)),
             "last_confirmed_at": timestamp,
             "valid_from": timestamp,
             "valid_to": None,
             "superseded_by": None,
-            "confidence": self._confidence_for_source_count(1),
+            "confidence": self._confidence_for_source_count(
+                max(1, int(initial_source_count or 1))
+            ),
         }
         if self.path is None:
             for item in current_facts:
@@ -295,6 +298,30 @@ class BeliefPlaneService:
             "count": len(rows[:limit]),
             "facts": rows[:limit],
         }
+
+    def stale_source_records(self) -> list[dict[str, Any]]:
+        rows = [item for item in self._fetch_rows() if item.get("valid_to")]
+        rows = sorted(
+            rows,
+            key=lambda item: (
+                item.get("valid_to") or "",
+                item.get("id") or "",
+            ),
+            reverse=True,
+        )
+        return [
+            {
+                "belief_id": item.get("id"),
+                "source_record_id": item.get("source_record_id"),
+                "source_session": item.get("source_session"),
+                "source_message_id": item.get("source_message_id"),
+                "memory_tier": item.get("memory_tier"),
+                "key": item.get("key"),
+                "value": item.get("value"),
+                "valid_to": item.get("valid_to"),
+            }
+            for item in rows
+        ]
 
     def apply_feedback(
         self,

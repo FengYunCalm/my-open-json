@@ -38,6 +38,27 @@ TEST_PATTERNS = [
     re.compile(r"test"),
 ]
 
+LOW_SIGNAL_WORKING_SESSION_TEXTS = {
+    "继续",
+    "开始",
+    "开始实施",
+    "提交",
+    "同意",
+    "收到",
+    "重启了",
+}
+
+ASSISTANT_PROGRESS_PATTERNS = [
+    re.compile(r"^(我先|我会先|我再|我准备|我现在|我继续|接下来我)"),
+    re.compile(r"^(先检查|再检查|然后看|最后检查)"),
+]
+
+ASSISTANT_ANALYSIS_SIGNAL_PATTERNS = [
+    re.compile(
+        r"根因|原因|因为|导致|所以|说明|表明|结论|发现|已经|返回|缺少|不一致|冲突|失败|成功|需要|应该"
+    ),
+]
+
 
 def classify_memory_tier(role: str | None, text: str) -> str:
     normalized_role = (role or "").strip().lower()
@@ -46,15 +67,38 @@ def classify_memory_tier(role: str | None, text: str) -> str:
         pattern.search(normalized_text) for pattern in PREFERENCE_PATTERNS
     ):
         return "user_preference"
-    if any(pattern.search(normalized_text) for pattern in PROJECT_PATTERNS) and any(
-        pattern.search(normalized_text) for pattern in CONSTRAINT_PATTERNS
-    ):
-        return "project_memory"
-    if any(pattern.search(normalized_text) for pattern in PROJECT_PATTERNS) and any(
-        pattern.search(normalized_text) for pattern in TEST_PATTERNS
-    ):
-        return "project_memory"
+    if normalized_role == "user":
+        if any(pattern.search(normalized_text) for pattern in PROJECT_PATTERNS) and any(
+            pattern.search(normalized_text) for pattern in CONSTRAINT_PATTERNS
+        ):
+            return "project_memory"
+        if any(pattern.search(normalized_text) for pattern in PROJECT_PATTERNS) and any(
+            pattern.search(normalized_text) for pattern in TEST_PATTERNS
+        ):
+            return "project_memory"
     return "working_session"
+
+
+def should_skip_memory_capture(role: str | None, text: str, memory_tier: str) -> bool:
+    normalized_role = (role or "").strip().lower()
+    normalized_text = " ".join((text or "").split()).strip().lower()
+
+    if not normalized_text:
+        return True
+    if memory_tier != "working_session":
+        return False
+    if normalized_text in LOW_SIGNAL_WORKING_SESSION_TEXTS:
+        return True
+    if normalized_role != "assistant":
+        return False
+    if not any(
+        pattern.match(normalized_text) for pattern in ASSISTANT_PROGRESS_PATTERNS
+    ):
+        return False
+    return not any(
+        pattern.search(normalized_text)
+        for pattern in ASSISTANT_ANALYSIS_SIGNAL_PATTERNS
+    )
 
 
 def derive_memory_key(memory_tier: str, text: str) -> str | None:
@@ -131,4 +175,5 @@ __all__ = [
     "classify_memory_tier",
     "derive_memory_key",
     "derive_memory_value",
+    "should_skip_memory_capture",
 ]

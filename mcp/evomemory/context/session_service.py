@@ -64,6 +64,13 @@ class SessionLifecycleService:
             next_order += 1
             content = f"{role.title()}:\n{text}"
             memory_tier = self.core.classify_memory_tier(role, text)
+            if self.core.should_skip_memory_capture(role, text, memory_tier):
+                self.core.evaluation_service.increment("skipped_low_signal_messages")
+                if role == "assistant":
+                    self.core.evaluation_service.increment(
+                        "skipped_low_signal_assistant_messages"
+                    )
+                continue
             memory_key = self.core.derive_memory_key(memory_tier, text)
             memory_value = self.core.derive_memory_value(memory_key, text)
             dedupe_hash = None
@@ -78,6 +85,9 @@ class SessionLifecycleService:
                     valid_to=filed_at,
                 )
                 if revision["skip_save"]:
+                    self.core.evaluation_service.increment(
+                        "skipped_duplicate_long_term_memory"
+                    )
                     scope = "user" if memory_tier == "user_preference" else "project"
                     self.core.promoter.promote_saved_memory(
                         scope=scope,
@@ -90,11 +100,15 @@ class SessionLifecycleService:
                             "drawer_id"
                         ),
                         valid_from=filed_at,
+                        initial_source_count=2,
                     )
                     continue
             if memory_tier == "working_session":
                 dedupe_hash = self.core.working_session_dedupe_hash(role, text)
                 if dedupe_hash in existing_working_hashes:
+                    self.core.evaluation_service.increment(
+                        "skipped_duplicate_working_session"
+                    )
                     continue
             saved.append(
                 self.core.repository.save_entry(
@@ -120,22 +134,7 @@ class SessionLifecycleService:
                 )
             )
             saved_entry = saved[-1]
-            if (
-                memory_key
-                and memory_value
-                and memory_tier in {"user_preference", "project_memory"}
-            ):
-                scope = "user" if memory_tier == "user_preference" else "project"
-                promotion = self.core.promoter.promote_saved_memory(
-                    scope=scope,
-                    memory_tier=memory_tier,
-                    memory_key=memory_key,
-                    memory_value=memory_value,
-                    source_session=session_id,
-                    source_message_id=info.get("id"),
-                    source_record_id=saved_entry.get("drawer_id"),
-                    valid_from=filed_at,
-                )
+            self.core.evaluation_service.increment(f"saved_{memory_tier}")
             if dedupe_hash:
                 existing_working_hashes.add(dedupe_hash)
 

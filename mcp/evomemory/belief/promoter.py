@@ -25,6 +25,7 @@ class MemoryPromoter:
         source_message_id: str | None,
         source_record_id: str | None,
         valid_from: str,
+        initial_source_count: int = 1,
     ) -> dict[str, Any]:
         promotion = self.belief_service.promote(
             scope=scope,
@@ -35,6 +36,7 @@ class MemoryPromoter:
             source_message_id=source_message_id,
             source_record_id=source_record_id,
             valid_from=valid_from,
+            initial_source_count=initial_source_count,
         )
 
         recorded_events = []
