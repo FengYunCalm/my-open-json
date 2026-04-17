@@ -54,5 +54,33 @@ test('buildDirectBridgeLaunch derives a direct fallback bridge command', () => {
     '--port',
     '8765',
   ])
-  assert.equal(launch?.env?.MEMPALACE_PALACE_PATH, '/home/tester/.mempalace/palace')
+  assert.equal(launch?.env?.EVOMEMORY_PALACE_PATH, '/home/tester/.evomemory/palace')
+  assert.equal(launch?.env?.MEMPALACE_PALACE_PATH, '/home/tester/.evomemory/palace')
+  assert.equal(launch?.env?.PYTHONPATH, '/home/tester/.config/opencode/mcp')
+})
+
+test('buildDirectBridgeLaunch preserves existing PYTHONPATH while appending evomemory source root', () => {
+  const launch = buildDirectBridgeLaunch(
+    { bridgeBaseUrl: 'http://127.0.0.1:8765' },
+    { HOME: '/home/tester', PYTHONPATH: '/tmp/custom:/opt/lib' },
+  )
+
+  assert.equal(
+    launch?.env?.PYTHONPATH,
+    '/tmp/custom:/opt/lib:/home/tester/.config/opencode/mcp',
+  )
+})
+
+test('buildDirectBridgeLaunch prefers existing evomemory palace path over legacy path', () => {
+  const launch = buildDirectBridgeLaunch(
+    { bridgeBaseUrl: 'http://127.0.0.1:8765' },
+    {
+      HOME: '/home/tester',
+      EVOMEMORY_PALACE_PATH: '/data/evomemory/palace',
+      MEMPALACE_PALACE_PATH: '/data/mempalace/palace',
+    },
+  )
+
+  assert.equal(launch?.env?.EVOMEMORY_PALACE_PATH, '/data/evomemory/palace')
+  assert.equal(launch?.env?.MEMPALACE_PALACE_PATH, '/data/evomemory/palace')
 })

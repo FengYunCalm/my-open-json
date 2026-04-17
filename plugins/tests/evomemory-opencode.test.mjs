@@ -15,7 +15,20 @@ test('ships evomemory plugin config template', () => {
   assert.equal(existsSync(path), true)
   const content = readFileSync(path, 'utf8')
   assert.match(content, /"bridgeBaseUrl"/)
-  assert.match(content, /mempalace-bridge\.service/)
+  assert.match(content, /evomemory-bridge\.service/)
+})
+
+test('opens evomemory as a remote MCP in opencode.json', () => {
+  const path = new URL('../..//opencode.json', import.meta.url)
+  assert.equal(existsSync(path), true)
+
+  const config = JSON.parse(readFileSync(path, 'utf8'))
+  const evomemory = config?.mcp?.evomemory
+
+  assert.equal(evomemory?.type, 'remote')
+  assert.equal(evomemory?.url, 'http://127.0.0.1:8765/mcp')
+  assert.equal(evomemory?.enabled, true)
+  assert.equal(Array.isArray(evomemory?.command), false)
 })
 
 test('ships richer opencode MCP templates and integration docs', () => {

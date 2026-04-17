@@ -1,5 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { existsSync, mkdtempSync } from 'node:fs'
+import path from 'node:path'
+import os from 'node:os'
 
 import {
   bridgeStatus,
@@ -55,7 +58,7 @@ test('ensureBridge falls back to direct launch after managed startup misses heal
 
   const config = {
     bridgeBaseUrl: 'http://127.0.0.1:8765',
-    ensureBridgeCommand: ['bash', '-lc', 'systemctl --user start mempalace-bridge.service'],
+    ensureBridgeCommand: ['bash', '-lc', 'systemctl --user start evomemory-bridge.service'],
     directBridgeCommand: ['python', 'evomemory/interfaces/mcp/server.py', '--host', '127.0.0.1', '--port', '8765'],
     healthcheckCacheTtlMs: 0,
   }
@@ -70,7 +73,43 @@ test('ensureBridge falls back to direct launch after managed startup misses heal
 
   assert.equal(ok, true)
   assert.deepEqual(spawnCalls, [
-    ['bash', '-lc', 'systemctl --user start mempalace-bridge.service'],
+    ['bash', '-lc', 'systemctl --user start evomemory-bridge.service'],
     ['python', 'evomemory/interfaces/mcp/server.py', '--host', '127.0.0.1', '--port', '8765'],
   ])
+})
+
+test('ensureBridge can spawn direct fallback without Bun globals', async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'evomemory-bridge-'))
+  const markerFile = path.join(tempDir, 'started.txt')
+
+  const originalBun = globalThis.Bun
+  try {
+    globalThis.Bun = undefined
+
+    const ok = await ensureBridge(
+      {
+        bridgeBaseUrl: 'http://127.0.0.1:65535',
+        ensureBridgeCommand: [],
+        directBridgeCommand: [
+          process.execPath,
+          '-e',
+          `require('fs').writeFileSync(${JSON.stringify(markerFile)}, 'ok')`,
+        ],
+        healthcheckCacheTtlMs: 0,
+      },
+      null,
+      {
+        fetchImpl: async () => ({ ok: false, json: async () => ({ ok: false }) }),
+        sleepImpl: async () => {},
+        logImpl: async () => {},
+        now: () => Date.now(),
+      },
+    )
+
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    assert.equal(ok, false)
+    assert.equal(existsSync(markerFile), true)
+  } finally {
+    globalThis.Bun = originalBun
+  }
 })

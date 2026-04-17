@@ -7,7 +7,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from evomemory.context.bridge import BridgeConfig, BridgeCore, MempalaceBackend
+from evomemory.context.bridge import (
+    EVOMEMORY_COLLECTION_NAME,
+    EVOMEMORY_PALACE_ENV,
+    LEGACY_COLLECTION_NAME,
+    LEGACY_PALACE_ENV,
+    BridgeConfig,
+    BridgeCore,
+    EvoMemoryBackend,
+    _resolve_palace_path,
+    _resolve_wing_config_path,
+)
 
 
 class FakeBackend:
@@ -497,7 +507,7 @@ class FakeBackend:
 
 def make_core(**config_overrides) -> tuple[BridgeCore, FakeBackend]:
     backend = FakeBackend()
-    temp_dir = Path(tempfile.mkdtemp(prefix="mempalace-bridge-test-"))
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-bridge-test-"))
     core = BridgeCore(
         BridgeConfig(
             max_block_chars=700,
@@ -510,6 +520,138 @@ def make_core(**config_overrides) -> tuple[BridgeCore, FakeBackend]:
     return core, backend
 
 
+def test_bridge_config_migrates_legacy_state_file_to_evomemory_name():
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-state-migrate-"))
+    legacy_state_path = temp_dir / "mempalace_bridge_state.json"
+    evomemory_state_path = temp_dir / "evomemory_bridge_state.sqlite3"
+    legacy_state_path.write_text("legacy", encoding="utf-8")
+
+    config = BridgeConfig(state_path=evomemory_state_path)
+
+    assert config.state_path == evomemory_state_path
+    assert evomemory_state_path.read_text(encoding="utf-8") == "legacy"
+    assert legacy_state_path.exists() is False
+
+
+def test_resolve_palace_path_prefers_evomemory_env_over_legacy_env():
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-palace-env-"))
+    env = {
+        EVOMEMORY_PALACE_ENV: str(temp_dir / "custom" / "evomemory-palace"),
+        LEGACY_PALACE_ENV: str(temp_dir / "custom" / "legacy-palace"),
+    }
+
+    resolved = _resolve_palace_path(None, env=env, home=temp_dir)
+
+    assert resolved == temp_dir / "custom" / "evomemory-palace"
+
+
+def test_resolve_palace_path_migrates_legacy_directory_to_evomemory_home():
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-palace-migrate-"))
+    legacy_palace = temp_dir / ".mempalace" / "palace"
+    legacy_palace.mkdir(parents=True)
+    (legacy_palace / "marker.txt").write_text("legacy", encoding="utf-8")
+
+    resolved = _resolve_palace_path(None, env={}, home=temp_dir)
+
+    assert resolved == temp_dir / ".evomemory" / "palace"
+    assert (resolved / "marker.txt").read_text(encoding="utf-8") == "legacy"
+    assert legacy_palace.is_symlink() is True
+    assert legacy_palace.resolve() == resolved
+
+
+def test_resolve_wing_config_path_migrates_legacy_config_to_evomemory_home():
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-wing-config-"))
+    legacy_config = temp_dir / ".mempalace" / "wing_config.json"
+    legacy_config.parent.mkdir(parents=True)
+    legacy_config.write_text('{"default": "opencode"}', encoding="utf-8")
+
+    resolved = _resolve_wing_config_path(
+        temp_dir / ".evomemory" / "wing_config.json",
+        home=temp_dir,
+    )
+
+    assert resolved == temp_dir / ".evomemory" / "wing_config.json"
+    assert resolved.read_text(encoding="utf-8") == '{"default": "opencode"}'
+    assert legacy_config.is_symlink() is True
+    assert legacy_config.resolve() == resolved
+
+
+def test_backend_migrates_legacy_collection_to_evomemory_collection_name():
+    class FakeCollection:
+        def __init__(self, name, rows=None):
+            self.name = name
+            self.rows = list(rows or [])
+
+        def count(self):
+            return len(self.rows)
+
+        def get(self, *, include, limit=None, offset=0, ids=None, where=None):
+            if ids is not None:
+                selected = [row for row in self.rows if row["id"] in ids]
+            else:
+                end = None if limit is None else offset + limit
+                selected = self.rows[offset:end]
+            return {
+                "ids": [row["id"] for row in selected],
+                "documents": [row["document"] for row in selected],
+                "metadatas": [row["metadata"] for row in selected],
+            }
+
+        def upsert(self, *, ids, documents, metadatas):
+            existing = {row["id"]: row for row in self.rows}
+            for drawer_id, document, metadata in zip(ids, documents, metadatas):
+                existing[drawer_id] = {
+                    "id": drawer_id,
+                    "document": document,
+                    "metadata": metadata,
+                }
+            self.rows = list(existing.values())
+
+    class FakeClient:
+        def __init__(self):
+            self.collections = {
+                LEGACY_COLLECTION_NAME: FakeCollection(
+                    LEGACY_COLLECTION_NAME,
+                    rows=[
+                        {
+                            "id": "drawer_opencode_opencode-session_migrate",
+                            "document": "User:\nremember me",
+                            "metadata": {
+                                "wing": "opencode",
+                                "room": "opencode-session",
+                            },
+                        }
+                    ],
+                )
+            }
+
+        def list_collections(self):
+            return list(self.collections.values())
+
+        def get_collection(self, name):
+            if name not in self.collections:
+                raise ValueError(name)
+            return self.collections[name]
+
+        def get_or_create_collection(self, name):
+            if name not in self.collections:
+                self.collections[name] = FakeCollection(name)
+            return self.collections[name]
+
+    backend = object.__new__(EvoMemoryBackend)
+    backend._client = FakeClient()
+    backend._collection = None
+    backend.collection_name = EVOMEMORY_COLLECTION_NAME
+
+    collection = EvoMemoryBackend._collection_for(backend, create=True)
+
+    assert collection.name == EVOMEMORY_COLLECTION_NAME
+    assert collection.count() == 1
+    assert backend._client.collections[EVOMEMORY_COLLECTION_NAME].rows[0]["id"] == (
+        "drawer_opencode_opencode-session_migrate"
+    )
+
+
 def test_backend_save_entry_omits_none_metadata_values():
     class CaptureCollection:
         def __init__(self):
@@ -519,10 +661,10 @@ def test_backend_save_entry_omits_none_metadata_values():
             self.metadatas = metadatas
 
     collection = CaptureCollection()
-    backend = object.__new__(MempalaceBackend)
+    backend = object.__new__(EvoMemoryBackend)
     backend._collection = collection
 
-    result = MempalaceBackend.save_entry(
+    result = EvoMemoryBackend.save_entry(
         backend,
         wing="opencode",
         room="opencode-session",
@@ -1318,7 +1460,7 @@ def test_debug_status_reports_state_and_runtime_metadata():
 
     payload = core.debug_status()
 
-    assert payload["service"] == "mempalace-bridge"
+    assert payload["service"] == "evomemory-bridge"
     assert payload["state_backend"] == "sqlite"
     assert payload["session_count"] == 1
     assert payload["last_search_at"] is not None

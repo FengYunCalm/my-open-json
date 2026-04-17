@@ -20,7 +20,7 @@ const MCP_CATALOG = {
   desktop_commander: "desktop commands, local processes, and richer file analysis",
   thinking: "explicit sequential reasoning for complex decisions",
   memory: "structured long-term knowledge graph memory",
-  mempalace: "local knowledge base and entity recall",
+  evomemory: "persistent project memory, decisions, governance assets, and benchmark history",
   relay: "relay collaboration rooms, threads, and workflow coordination",
   xiakexing_ai: "XiaKeXing gameplay automation and regression checks",
 };

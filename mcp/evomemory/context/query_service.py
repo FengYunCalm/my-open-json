@@ -63,7 +63,7 @@ class ContextQueryService:
         payload = self.core.repository.status()
         payload.update(
             {
-                "service": "mempalace-bridge",
+                "service": "evomemory-bridge",
                 "state_path": str(self.core.config.state_path),
             }
         )

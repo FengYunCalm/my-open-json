@@ -1,4 +1,5 @@
 import { buildDirectBridgeLaunch } from './evomemory-opencode.helpers.mjs'
+import { spawn as nodeSpawn } from 'node:child_process'
 
 const healthCache = new Map()
 
@@ -9,7 +10,20 @@ function getFetchImpl(fetchImpl) {
 function getSpawnImpl(spawnImpl) {
   if (spawnImpl) return spawnImpl
   if (globalThis.Bun?.spawn) return globalThis.Bun.spawn.bind(globalThis.Bun)
-  throw new Error('Bun.spawn is unavailable')
+  return (options) => {
+    const child = nodeSpawn(options.cmd[0], options.cmd.slice(1), {
+      env: options.env,
+      stdio: ['ignore', options.stdout ?? 'ignore', options.stderr ?? 'ignore'],
+      detached: true,
+    })
+    child.unref()
+    return {
+      exited: new Promise((resolve, reject) => {
+        child.once('error', reject)
+        child.once('exit', (code) => resolve(code ?? 0))
+      }),
+    }
+  }
 }
 
 function getNow(now) {

@@ -49,6 +49,7 @@ test('injects tool-forced-eval through system transform instead of user message 
   assert.match(injected, /If any MCP applies: call the MCP tool immediately before answering\./)
   assert.match(injected, /Visible MCP tools from local config:/)
   assert.match(injected, /- `context7`: library and framework docs lookup\./)
+  assert.match(injected, /- `evomemory`: persistent project memory, decisions, governance assets, and benchmark history\./)
   assert.match(injected, /- `relay`: relay collaboration rooms, threads, and workflow coordination\./)
   assert.match(injected, /- `xiakexing_ai`: XiaKeXing gameplay automation and regression checks\./)
 })

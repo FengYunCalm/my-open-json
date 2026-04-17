@@ -5,8 +5,8 @@
   "provider": {
     "openai": {
       "options": {
-        "baseURL": "http://127.0.0.1:4000/v1",
-        "apiKey": "REPLACE_WITH_REAL_API_KEY"
+       "baseURL": "http://127.0.0.1:4000/v1",
+        "apiKey": "sk-351272c47690a73102d142e29367a1fa32fa9647210e8993"
       },
       "models": {
         "gpt-5.4": {
@@ -63,9 +63,9 @@
     },
     "filesystem": {
       "command": [
-        "/home/mechrevo",
         "/home/mechrevo/.local/bin/node",
         "/home/mechrevo/.config/opencode/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js",
+        "/home/mechrevo",
         "/mnt/c/Users/23916",
         "/mnt/d"
       ],
@@ -123,10 +123,10 @@
       "enabled": true,
       "type": "local"
     },
-    "mempalace": {
+    "evomemory": {
+      "type": "remote",
       "enabled": true,
       "timeout": 10000,
-      "type": "remote",
       "url": "http://127.0.0.1:8765/mcp"
     }
   },

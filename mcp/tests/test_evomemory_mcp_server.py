@@ -21,7 +21,7 @@ class FakeCore:
 
     def debug_status(self):
         return {
-            "service": "mempalace-bridge",
+            "service": "evomemory-bridge",
             "state_backend": "sqlite",
             "session_count": 2,
             "drawer_count": 12,
@@ -218,7 +218,7 @@ class FakeCore:
         self.calls.append(("evomemory_status", {}))
         return {
             "service": "evomemory",
-            "context": {"service": "mempalace-bridge"},
+            "context": {"service": "evomemory-bridge"},
             "belief": {"plane": "belief", "fact_count": 0},
             "governance": {
                 "plane": "governance",
@@ -347,7 +347,7 @@ class FakeCore:
         self.calls.append(("evomemory_export_snapshot", {"limit": limit}))
         return {
             "service": "evomemory",
-            "context": {"service": "mempalace-bridge"},
+            "context": {"service": "evomemory-bridge"},
             "belief": {"count": 0, "facts": []},
             "governance": {"gene_count": 0, "capsule_count": 0, "event_count": 0},
             "evaluation": {"metrics": {}},

@@ -1,4 +1,5 @@
 import path from 'path'
+import fs from 'fs'
 
 const SMALL_TALK = new Set(['ok', 'okay', 'yes', 'no', 'thanks', 'thank you', 'continue', 'start', 'go'])
 
@@ -57,10 +58,22 @@ export function buildDirectBridgeLaunch(config = {}, env = process.env) {
   if (!home) return null
 
   const bridgeUrl = new URL(config.bridgeBaseUrl ?? 'http://127.0.0.1:8765')
+  const sourceRoot = path.join(home, '.config', 'opencode', 'mcp')
+  const palacePath =
+    env.EVOMEMORY_PALACE_PATH ||
+    env.MEMPALACE_PALACE_PATH ||
+    path.join(home, '.evomemory', 'palace')
+  const defaultPython = (() => {
+    const candidates = [
+      path.join(home, '.local', 'opt', 'evomemory-opencode', 'venv', 'bin', 'python'),
+      path.join(home, '.config', 'opencode', '.venv', 'bin', 'python'),
+    ]
+    return candidates.find((file) => fs.existsSync(file)) ?? candidates[0]
+  })()
   const directBridgeCommand = Array.isArray(config.directBridgeCommand)
     ? config.directBridgeCommand
     : [
-        path.join(home, '.local', 'opt', 'evomemory-opencode', 'venv', 'bin', 'python'),
+        defaultPython,
         path.join(home, '.config', 'opencode', 'mcp', 'evomemory', 'interfaces', 'mcp', 'server.py'),
         '--host',
         bridgeUrl.hostname,
@@ -73,8 +86,14 @@ export function buildDirectBridgeLaunch(config = {}, env = process.env) {
   return {
     cmd: directBridgeCommand,
     env: {
-      MEMPALACE_PALACE_PATH:
-        env.MEMPALACE_PALACE_PATH || path.join(home, '.mempalace', 'palace'),
+      EVOMEMORY_PALACE_PATH: palacePath,
+      MEMPALACE_PALACE_PATH: palacePath,
+      PYTHONPATH: env.PYTHONPATH
+        ? [
+            ...env.PYTHONPATH.split(path.delimiter).filter(Boolean),
+            sourceRoot,
+          ].filter((item, index, list) => list.indexOf(item) === index).join(path.delimiter)
+        : sourceRoot,
     },
   }
 }

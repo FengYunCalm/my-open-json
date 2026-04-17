@@ -7,6 +7,6 @@
   "ensureBridgeCommand": [
     "bash",
     "-lc",
-    "systemctl --user start mempalace-bridge.service"
+    "systemctl --user start evomemory-bridge.service"
   ]
 }

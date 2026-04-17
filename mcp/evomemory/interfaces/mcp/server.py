@@ -12,7 +12,7 @@ from evomemory.context.bridge import BridgeConfig, BridgeCore
 
 
 def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
-    server = FastMCP("mempalace", streamable_http_path="/mcp", stateless_http=True)
+    server = FastMCP("evomemory", streamable_http_path="/mcp", stateless_http=True)
 
     @server.tool(name="evomemory_context_status")
     def evomemory_context_status() -> dict[str, Any]:
@@ -287,7 +287,12 @@ def create_app(core: BridgeCore | Any | None = None):
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="OpenCode bridge for MemPalace")
+    parser = argparse.ArgumentParser(description="OpenCode bridge for EvoMemory")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "streamable-http"],
+        default="streamable-http",
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=8765, type=int)
     parser.add_argument("--palace-path", default=None)
@@ -301,7 +306,11 @@ def main() -> None:
         if args.palace_path
         else BridgeConfig()
     )
-    uvicorn.run(create_app(BridgeCore(config)), host=args.host, port=args.port)
+    core = BridgeCore(config)
+    if args.transport == "stdio":
+        create_mcp_server(core).run("stdio")
+        return
+    uvicorn.run(create_app(core), host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

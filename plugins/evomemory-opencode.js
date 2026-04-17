@@ -19,7 +19,7 @@ const DEFAULTS = {
   autoFlushOnIdle: true,
   autoFlushOnCompact: true,
   healthcheckCacheTtlMs: 1000,
-  ensureBridgeCommand: ['bash', '-lc', 'systemctl --user start mempalace-bridge.service'],
+  ensureBridgeCommand: ['bash', '-lc', 'systemctl --user start evomemory-bridge.service'],
 }
 
 function loadConfig() {
@@ -166,10 +166,8 @@ export const EvomemoryOpencodePlugin = async ({ client, directory, worktree }) =
         return null
       })
       if (payload) {
-        output.context.push('Recent conversation was persisted to MemPalace before compaction.')
+        output.context.push('Recent conversation was persisted to EvoMemory before compaction.')
       }
     },
   }
 }
-
-export const MempalaceOpencodePlugin = EvomemoryOpencodePlugin

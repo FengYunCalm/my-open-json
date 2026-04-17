@@ -32,7 +32,7 @@ except (
     class KnowledgeGraph:  # type: ignore[no-redef]
         def __init__(self, *args, **kwargs):
             raise RuntimeError(
-                "mempalace is required to initialize the knowledge graph backend. Install mempalace before using the live backend."
+                "The EvoMemory backend requires the underlying knowledge graph package. Install the package before using the live backend."
             )
 
 
@@ -66,6 +66,95 @@ VALID_ROLES = {"user", "assistant"}
 VALID_MEMORY_TIERS = {"working_session", "user_preference", "project_memory"}
 PREVIEW_CHARS = 200
 FETCH_BATCH_SIZE = 1000
+EVOMEMORY_HOME_DIRNAME = ".evomemory"
+LEGACY_HOME_DIRNAME = ".mempalace"
+EVOMEMORY_PALACE_ENV = "EVOMEMORY_PALACE_PATH"
+LEGACY_PALACE_ENV = "MEMPALACE_PALACE_PATH"
+EVOMEMORY_COLLECTION_NAME = "evomemory_drawers"
+LEGACY_COLLECTION_NAME = "mempalace_drawers"
+LEGACY_STATE_FILENAME = "mempalace_bridge_state.json"
+EVOMEMORY_STATE_FILENAME = "evomemory_bridge_state.sqlite3"
+
+
+def _default_evomemory_home(home: Path | None = None) -> Path:
+    return (home or Path.home()) / EVOMEMORY_HOME_DIRNAME
+
+
+def _default_legacy_home(home: Path | None = None) -> Path:
+    return (home or Path.home()) / LEGACY_HOME_DIRNAME
+
+
+def _ensure_legacy_symlink(legacy_path: Path, target_path: Path) -> None:
+    if legacy_path.is_symlink():
+        if legacy_path.resolve() == target_path.resolve():
+            return
+        legacy_path.unlink()
+    elif legacy_path.exists():
+        return
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_path.symlink_to(target_path, target_is_directory=target_path.is_dir())
+
+
+def _migrate_legacy_path(legacy_path: Path, resolved: Path) -> Path:
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    if resolved.exists():
+        _ensure_legacy_symlink(legacy_path, resolved)
+        return resolved
+    if legacy_path.exists() and not legacy_path.is_symlink():
+        legacy_path.replace(resolved)
+        _ensure_legacy_symlink(legacy_path, resolved)
+    return resolved
+
+
+def _resolve_state_path(state_path: Path) -> Path:
+    resolved = Path(state_path)
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    legacy_state_path = resolved.with_name(LEGACY_STATE_FILENAME)
+    if (
+        resolved.name == EVOMEMORY_STATE_FILENAME
+        and not resolved.exists()
+        and legacy_state_path.exists()
+    ):
+        legacy_state_path.replace(resolved)
+    return resolved
+
+
+def _resolve_palace_path(
+    palace_path: str | Path | None,
+    *,
+    env: dict[str, str] | None = None,
+    home: Path | None = None,
+) -> Path:
+    env = env or os.environ
+    home = home or Path.home()
+    if palace_path:
+        resolved = Path(palace_path)
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        return resolved
+    if env.get(EVOMEMORY_PALACE_ENV):
+        resolved = Path(env[EVOMEMORY_PALACE_ENV])
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        return resolved
+    if env.get(LEGACY_PALACE_ENV):
+        resolved = Path(env[LEGACY_PALACE_ENV])
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        return resolved
+    return _migrate_legacy_path(
+        _default_legacy_home(home) / "palace",
+        _default_evomemory_home(home) / "palace",
+    )
+
+
+def _resolve_wing_config_path(
+    wing_config_path: Path, *, home: Path | None = None
+) -> Path:
+    home = home or Path.home()
+    legacy_config_path = _default_legacy_home(home) / "wing_config.json"
+    default_config_path = _default_evomemory_home(home) / "wing_config.json"
+    if wing_config_path == default_config_path:
+        return _migrate_legacy_path(legacy_config_path, wing_config_path)
+    wing_config_path.parent.mkdir(parents=True, exist_ok=True)
+    return wing_config_path
 
 
 def _sanitize_optional_name(value: str | None, field_name: str) -> str | None:
@@ -183,11 +272,13 @@ def _message_sort_key(item: dict[str, Any]) -> tuple[Any, ...]:
 @dataclass(slots=True)
 class BridgeConfig:
     palace_path: str | None = None
-    collection_name: str = "mempalace_drawers"
+    collection_name: str = EVOMEMORY_COLLECTION_NAME
     state_path: Path | str = (
-        Path.home() / ".config" / "opencode" / "mcp" / "mempalace_bridge_state.json"
+        Path.home() / ".config" / "opencode" / "mcp" / EVOMEMORY_STATE_FILENAME
     )
-    wing_config_path: Path | str = Path.home() / ".mempalace" / "wing_config.json"
+    wing_config_path: Path | str = (
+        Path.home() / EVOMEMORY_HOME_DIRNAME / "wing_config.json"
+    )
     default_room: str = "opencode-session"
     search_limit: int = 5
     core_memory_limit: int = 6
@@ -197,23 +288,25 @@ class BridgeConfig:
     working_session_retain_count: int = 4
 
     def __post_init__(self):
-        self.state_path = Path(self.state_path)
-        self.wing_config_path = Path(self.wing_config_path)
+        self.palace_path = str(_resolve_palace_path(self.palace_path))
+        self.state_path = _resolve_state_path(Path(self.state_path))
+        self.wing_config_path = _resolve_wing_config_path(Path(self.wing_config_path))
 
 
-class MempalaceBackend:
+class EvoMemoryBackend:
     def __init__(self, config: BridgeConfig):
         if MempalaceConfig is None:
             raise RuntimeError(
-                "mempalace is required to initialize the MemPalace backend. Install mempalace before using the live backend."
+                "The EvoMemory backend requires the underlying memory package. Install it before using the live backend."
             )
         self.bridge_config = config
-        self.mempalace_config = MempalaceConfig()
+        self.library_config = MempalaceConfig()
         if config.palace_path:
-            os.environ["MEMPALACE_PALACE_PATH"] = config.palace_path
-        self.palace_path = config.palace_path or self.mempalace_config.palace_path
+            os.environ[EVOMEMORY_PALACE_ENV] = config.palace_path
+            os.environ[LEGACY_PALACE_ENV] = config.palace_path
+        self.palace_path = config.palace_path or self.library_config.palace_path
         self.collection_name = (
-            config.collection_name or self.mempalace_config.collection_name
+            config.collection_name or self.library_config.collection_name
         )
         self._client: chromadb.PersistentClient | None = None
         self._collection = None
@@ -222,23 +315,59 @@ class MempalaceBackend:
         )
 
     def _client_for(self) -> chromadb.PersistentClient:
+        if self._client is not None:
+            return self._client
         if chromadb is None:
             raise RuntimeError(
-                "chromadb is required to initialize the MemPalace backend. Install chromadb before using the live backend."
+                "chromadb is required to initialize the EvoMemory backend. Install chromadb before using the live backend."
             )
-        if self._client is None:
-            self._client = chromadb.PersistentClient(path=self.palace_path)
+        self._client = chromadb.PersistentClient(path=self.palace_path)
         return self._client
 
     def _collection_for(self, create: bool = False):
         if self._collection is not None:
             return self._collection
         client = self._client_for()
-        if create:
-            self._collection = client.get_or_create_collection(self.collection_name)
-        else:
+        try:
             self._collection = client.get_collection(self.collection_name)
+        except Exception:
+            if not create and self.collection_name == LEGACY_COLLECTION_NAME:
+                raise
+            self._collection = client.get_or_create_collection(self.collection_name)
+        if self.collection_name != LEGACY_COLLECTION_NAME:
+            self._migrate_legacy_collection(client, self._collection)
         return self._collection
+
+    def _collection_has_rows(self, collection: Any) -> bool:
+        try:
+            rows = collection.get(include=["documents", "metadatas"], limit=1, offset=0)
+        except TypeError:
+            rows = collection.get(include=["documents", "metadatas"])
+        return bool(rows.get("ids", []))
+
+    def _migrate_legacy_collection(self, client: Any, target_collection: Any) -> None:
+        try:
+            legacy_collection = client.get_collection(LEGACY_COLLECTION_NAME)
+        except Exception:
+            return
+        if self._collection_has_rows(target_collection):
+            return
+        offset = 0
+        while True:
+            batch = legacy_collection.get(
+                include=["documents", "metadatas"],
+                limit=FETCH_BATCH_SIZE,
+                offset=offset,
+            )
+            ids = batch.get("ids", [])
+            if not ids:
+                break
+            target_collection.upsert(
+                ids=ids,
+                documents=batch.get("documents", []),
+                metadatas=batch.get("metadatas", []),
+            )
+            offset += len(ids)
 
     def _make_where(
         self,
@@ -826,7 +955,7 @@ class BridgeCore:
     def __init__(self, config: BridgeConfig | None = None, backend: Any | None = None):
         self.config = config or BridgeConfig()
         self.state_store = SessionStateStore(self.config.state_path)
-        self.repository = ContextRepository(backend or MempalaceBackend(self.config))
+        self.repository = ContextRepository(backend or EvoMemoryBackend(self.config))
         self.backend = self.repository.backend
         self.runtime = {
             "last_search_at": None,
@@ -1059,7 +1188,7 @@ class BridgeCore:
         used = self._append_block_lines(
             lines,
             used,
-            f"MemPalace context for wing '{wing}':",
+            f"EvoMemory context for wing '{wing}':",
             results,
             "context",
         )

@@ -163,7 +163,7 @@ class PromotionBackend:
 def test_evomemory_exposes_phase_one_contracts_and_modules():
     from evomemory import BeliefPlaneService, GovernancePlaneService
     from evomemory.contracts import Capsule, EvolutionEvent, Gene, MemoryRecord
-    from evomemory.context.bridge import BridgeConfig, BridgeCore, MempalaceBackend
+    from evomemory.context.bridge import BridgeConfig, BridgeCore, EvoMemoryBackend
     from evomemory.context.query_service import ContextQueryService
     from evomemory.context.repository import ContextRepository
     from evomemory.context.session_service import SessionLifecycleService
@@ -198,7 +198,7 @@ def test_evomemory_exposes_phase_one_contracts_and_modules():
     assert SessionLifecycleService is not None
     assert ContextQueryService is not None
     assert GovernancePlaneService is not None
-    assert MempalaceBackend is not None
+    assert EvoMemoryBackend is not None
     assert classify_memory_tier("user", "以后都用中文") == "user_preference"
     assert SessionStateStore is not None
     assert create_app is not None
@@ -229,7 +229,7 @@ def test_bridge_core_exposes_evomemory_unified_query_surface():
 
     status = core.evomemory_status()
     assert status["service"] == "evomemory"
-    assert status["context"]["service"] == "mempalace-bridge"
+    assert status["context"]["service"] == "evomemory-bridge"
     assert status["belief"]["plane"] == "belief"
     assert status["governance"]["plane"] == "governance"
     assert core.evomemory_query_beliefs()["facts"] == []
@@ -812,7 +812,7 @@ def test_export_snapshot_returns_all_planes():
     snapshot = core.evomemory_export_snapshot(limit=10)
 
     assert snapshot["service"] == "evomemory"
-    assert snapshot["context"]["service"] == "mempalace-bridge"
+    assert snapshot["context"]["service"] == "evomemory-bridge"
     assert snapshot["belief"]["count"] >= 2
     assert snapshot["governance"]["gene_count"] >= 2
     assert snapshot["governance"]["capsule_count"] >= 1
@@ -1093,16 +1093,31 @@ def test_governance_queries_support_scope_and_stale_filters():
 
 
 def test_canonical_modules_live_under_evomemory_namespace():
-    from evomemory.context.bridge import BridgeConfig, BridgeCore, MempalaceBackend
+    from evomemory.context.bridge import BridgeConfig, BridgeCore, EvoMemoryBackend
     from evomemory.domain.memory_policy import classify_memory_tier
     from evomemory.infrastructure.state.session_state import SessionStateStore
     from evomemory.interfaces.mcp.server import create_app
 
     assert BridgeConfig.__module__ == "evomemory.context.bridge"
     assert BridgeCore.__module__ == "evomemory.context.bridge"
-    assert MempalaceBackend.__module__ == "evomemory.context.bridge"
+    assert EvoMemoryBackend.__module__ == "evomemory.context.bridge"
     assert classify_memory_tier.__module__ == "evomemory.domain.memory_policy"
     assert (
         SessionStateStore.__module__ == "evomemory.infrastructure.state.session_state"
     )
     assert create_app.__module__ == "evomemory.interfaces.mcp.server"
+
+
+def test_server_parse_args_supports_stdio_transport():
+    import sys
+
+    from evomemory.interfaces.mcp.server import parse_args
+
+    original = list(sys.argv)
+    try:
+        sys.argv = ["server.py", "--transport", "stdio"]
+        args = parse_args()
+    finally:
+        sys.argv = original
+
+    assert args.transport == "stdio"
