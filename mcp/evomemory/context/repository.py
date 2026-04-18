@@ -16,6 +16,33 @@ class ContextRepository:
     def save_entry(self, **kwargs):
         return self.backend.save_entry(**kwargs)
 
+    def import_drawers(self, drawers: list[dict[str, Any]]):
+        importer = getattr(self.backend, "import_drawers", None)
+        if callable(importer):
+            return importer(drawers)
+
+        imported = []
+        skipped = 0
+        getter = getattr(self.backend, "get_drawer", None)
+        for item in drawers:
+            drawer_id = item.get("drawer_id")
+            if callable(getter) and drawer_id and getter(drawer_id) is not None:
+                skipped += 1
+                continue
+            payload = self.backend.save_entry(
+                wing=item.get("wing") or "unknown",
+                room=item.get("room") or "unknown",
+                content=item.get("text") or item.get("content") or "",
+                source_file=item.get("source_file") or "archive:unknown",
+                metadata=dict(item.get("metadata") or {}),
+            )
+            imported.append(payload)
+        return {
+            "imported_count": len(imported),
+            "skipped_count": skipped,
+            "drawers": imported,
+        }
+
     def invalidate_memory_conflicts(self, **kwargs):
         return self.backend.invalidate_memory_conflicts(**kwargs)
 

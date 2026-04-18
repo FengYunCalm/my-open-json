@@ -73,6 +73,96 @@ class EvaluationPlaneService:
             "metrics": metrics,
         }
 
+    def _fetch_feedback_records(self) -> list[dict]:
+        if self.path is None:
+            return list(getattr(self, "_feedback_records", []))
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id, target_kind, target_id, signal, delta, note, created_at FROM feedback_records ORDER BY created_at DESC, id DESC"
+            ).fetchall()
+        return [
+            {
+                "id": row[0],
+                "target_kind": row[1],
+                "target_id": row[2],
+                "signal": row[3],
+                "delta": int(row[4]),
+                "note": row[5],
+                "created_at": row[6],
+            }
+            for row in rows
+        ]
+
+    def export_state(self, *, limit: int | None = None) -> dict:
+        metrics = self.summary().get("metrics", {})
+        feedback = self._fetch_feedback_records()
+        if limit is not None:
+            feedback = feedback[: max(0, int(limit))]
+        return {
+            "metrics": metrics,
+            "feedback": feedback,
+        }
+
+    def merge_metrics(self, metrics: dict[str, int]) -> dict[str, int]:
+        incoming = {str(key): int(value or 0) for key, value in (metrics or {}).items()}
+        if not incoming:
+            return {"merged_count": 0}
+        current = self.summary().get("metrics", {})
+        merged = {
+            key: max(int(current.get(key) or 0), value) for key, value in incoming.items()
+        }
+        if self.path is None:
+            self._metrics.update(merged)
+        else:
+            with self._connect() as connection:
+                connection.executemany(
+                    "INSERT OR REPLACE INTO evaluation_metrics (key, value) VALUES (?, ?)",
+                    list(merged.items()),
+                )
+        return {"merged_count": len(merged)}
+
+    def upsert_feedback(self, records: list[dict]) -> dict[str, int]:
+        if not records:
+            return {"upserted_count": 0}
+        existing_ids = {
+            item.get("id") for item in self._fetch_feedback_records() if item.get("id")
+        }
+        payload = [
+            (
+                item["id"],
+                item.get("target_kind") or "belief",
+                item.get("target_id") or "",
+                item.get("signal") or "confirm",
+                int(item.get("delta") or 0),
+                item.get("note"),
+                item.get("created_at"),
+            )
+            for item in records
+            if item.get("id")
+        ]
+        if self.path is None:
+            merged = {
+                item.get("id"): item
+                for item in getattr(self, "_feedback_records", [])
+                if item.get("id")
+            }
+            for item in records:
+                if item.get("id"):
+                    merged[item["id"]] = {**item}
+            self._feedback_records = list(merged.values())
+        else:
+            with self._connect() as connection:
+                connection.executemany(
+                    "INSERT OR REPLACE INTO feedback_records (id, target_kind, target_id, signal, delta, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    payload,
+                )
+        imported_ids = {item.get("id") for item in records if item.get("id")}
+        return {
+            "upserted_count": len(imported_ids),
+            "created_count": len(imported_ids - existing_ids),
+            "updated_count": len(imported_ids & existing_ids),
+        }
+
     def record_feedback(
         self,
         *,

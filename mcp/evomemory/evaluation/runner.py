@@ -21,6 +21,7 @@ class BenchmarkRunner:
         runtime_context = snapshot.get("runtime_context") or {}
         budget_policy = snapshot.get("context", {}).get("budget_policy") or {}
         budget_policy_diff = snapshot.get("context", {}).get("budget_policy_diff") or {}
+        archive = snapshot.get("archive") or {}
         runtime_candidate_belief_keys = list(
             runtime_context.get("belief_memory_keys") or []
         )
@@ -74,6 +75,13 @@ class BenchmarkRunner:
             ),
             "budget_policy": budget_policy,
             "budget_policy_diff": budget_policy_diff,
+            "archive_format": archive.get("format"),
+            "archive_drawer_count": int(
+                (archive.get("context") or {}).get("drawer_count") or 0
+            ),
+            "archive_belief_count": int(
+                (archive.get("belief") or {}).get("count") or 0
+            ),
             "top_runtime_belief_key": (
                 runtime_candidate_belief_keys[0]
                 if runtime_candidate_belief_keys
@@ -125,6 +133,11 @@ class BenchmarkRunner:
                 scenario_summary["top_runtime_gene_key"] is not None
                 and scenario_summary["top_runtime_gene_key"]
                 in scenario_summary["runtime_gene_keys"]
+            ),
+            "archive_export_ready": (
+                scenario_summary["archive_format"] == "evomemory-archive-v1"
+                and scenario_summary["archive_drawer_count"] >= 0
+                and scenario_summary["archive_belief_count"] >= 0
             ),
         }
         score = sum(1 for passed in checks.values() if passed) + sum(

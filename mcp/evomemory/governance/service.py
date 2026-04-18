@@ -181,6 +181,136 @@ class GovernancePlaneService:
             ),
         }
 
+    def export_state(self, *, limit: int | None = None) -> dict[str, list[dict]]:
+        if limit is None:
+            return {
+                "genes": self._fetch_genes(),
+                "capsules": self._fetch_capsules(),
+                "events": self._fetch_events(),
+            }
+        normalized_limit = max(0, int(limit))
+        return {
+            "genes": self._fetch_genes()[:normalized_limit],
+            "capsules": self._fetch_capsules()[:normalized_limit],
+            "events": self._fetch_events()[:normalized_limit],
+        }
+
+    def upsert_genes(self, genes: list[dict]) -> dict[str, int]:
+        if not genes:
+            return {"upserted_count": 0}
+        existing_ids = {item.get("id") for item in self._fetch_genes() if item.get("id")}
+        records = [
+            (
+                item["id"],
+                item.get("scope") or "project",
+                item.get("key") or "unknown",
+                item.get("value") or "unknown",
+                item.get("summary") or "",
+                item.get("source_fact_id"),
+                item.get("created_at"),
+                int(item.get("score") or 0),
+                int(bool(item.get("is_stale"))),
+                item.get("demoted_at"),
+            )
+            for item in genes
+            if item.get("id")
+        ]
+        if self.path is None:
+            merged = {item.get("id"): item for item in self._genes if item.get("id")}
+            for item in genes:
+                if item.get("id"):
+                    merged[item["id"]] = {**item}
+            self._genes = list(merged.values())
+        else:
+            with self._connect() as connection:
+                connection.executemany(
+                    "INSERT OR REPLACE INTO genes (id, scope, key, value, summary, source_fact_id, created_at, score, is_stale, demoted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    records,
+                )
+        imported_ids = {item.get("id") for item in genes if item.get("id")}
+        return {
+            "upserted_count": len(imported_ids),
+            "created_count": len(imported_ids - existing_ids),
+            "updated_count": len(imported_ids & existing_ids),
+        }
+
+    def upsert_capsules(self, capsules: list[dict]) -> dict[str, int]:
+        if not capsules:
+            return {"upserted_count": 0}
+        existing_ids = {
+            item.get("id") for item in self._fetch_capsules() if item.get("id")
+        }
+        records = [
+            (
+                item["id"],
+                item.get("scope") or "project",
+                item.get("summary") or "",
+                json.dumps(item.get("gene_ids", [])),
+                item.get("updated_at"),
+                int(item.get("score") or 0),
+                int(bool(item.get("is_stale"))),
+                item.get("demoted_at"),
+            )
+            for item in capsules
+            if item.get("id")
+        ]
+        if self.path is None:
+            merged = {
+                item.get("id"): item for item in self._capsules if item.get("id")
+            }
+            for item in capsules:
+                if item.get("id"):
+                    merged[item["id"]] = {**item}
+            self._capsules = list(merged.values())
+        else:
+            with self._connect() as connection:
+                connection.executemany(
+                    "INSERT OR REPLACE INTO capsules (id, scope, summary, gene_ids_json, updated_at, score, is_stale, demoted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    records,
+                )
+        imported_ids = {item.get("id") for item in capsules if item.get("id")}
+        return {
+            "upserted_count": len(imported_ids),
+            "created_count": len(imported_ids - existing_ids),
+            "updated_count": len(imported_ids & existing_ids),
+        }
+
+    def upsert_events(self, events: list[dict]) -> dict[str, int]:
+        if not events:
+            return {"upserted_count": 0}
+        existing_ids = {item.get("id") for item in self._fetch_events() if item.get("id")}
+        records = [
+            (
+                item["id"],
+                item.get("action") or "promote",
+                item.get("target_kind") or "belief",
+                item.get("target_id") or "",
+                item.get("rationale"),
+                item.get("source_record_id"),
+                item.get("created_at"),
+            )
+            for item in events
+            if item.get("id")
+        ]
+        if self.path is None:
+            merged = {item.get("id"): item for item in self._events if item.get("id")}
+            for item in events:
+                if item.get("id"):
+                    merged[item["id"]] = {**item}
+            self._events = list(merged.values())
+        else:
+            with self._connect() as connection:
+                connection.executemany(
+                    "INSERT OR REPLACE INTO evolution_events (id, action, target_kind, target_id, rationale, source_record_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    records,
+                )
+        imported_ids = {item.get("id") for item in events if item.get("id")}
+        return {
+            "upserted_count": len(imported_ids),
+            "created_count": len(imported_ids - existing_ids),
+            "updated_count": len(imported_ids & existing_ids),
+        }
+
     def preview_reconcile_stale_assets(self, stale_belief_ids: list[str]) -> dict:
         stale_belief_id_set = set(stale_belief_ids)
         if not stale_belief_id_set:

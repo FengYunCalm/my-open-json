@@ -125,16 +125,21 @@ class ContextQueryService:
         return payload
 
     def search_context(
-        self, query: str, directory: str, session_id: str | None = None
+        self,
+        query: str,
+        directory: str,
+        session_id: str | None = None,
+        include_trace: bool = False,
     ) -> dict[str, Any]:
         normalized_directory = self.core._normalize_directory(directory)
         wing = self.core.resolve_wing(directory)
-        context_items, context_total_count, context_truncated_count = (
-            self.core._tiered_context_results(
+        context_items, context_total_count, context_truncated_count, retrieval_trace = (
+            self.core.retrieval_service.search_context(
                 query=query,
                 directory=normalized_directory,
                 wing=wing,
                 session_id=session_id,
+                include_trace=include_trace,
             )
         )
         results = [self.core._format_context_hit(item) for item in context_items]
@@ -162,6 +167,8 @@ class ContextQueryService:
                 context_truncated_count=context_truncated_count,
             ),
         }
+        if retrieval_trace is not None:
+            payload["retrieval_trace"] = retrieval_trace
         result = self.core.runtime_orchestrator.augment_context_payload(payload)
         self._record_runtime_context(result)
         return result
@@ -207,6 +214,7 @@ class ContextQueryService:
         current_only: bool = False,
         historical_only: bool = False,
         room: str | None = None,
+        include_trace: bool = False,
     ) -> dict[str, Any]:
         try:
             safe_wing = self.core.sanitize_optional_name(wing, "wing")
@@ -214,28 +222,34 @@ class ContextQueryService:
             safe_room = self.core.sanitize_optional_name(room, "room")
         except ValueError as exc:
             return {"error": str(exc)}
-        results = [
-            self.core._format_public_hit(item)
-            for item in self.core.repository.query_drawers(
+        normalized_limit = self.core._normalize_limit(limit, default=5)
+        rows, candidate_count, truncated_count, retrieval_trace = (
+            self.core.retrieval_service.search_drawers(
                 query=query,
+                limit=normalized_limit,
                 wing=safe_wing,
                 memory_tier=safe_memory_tier,
                 current_only=current_only,
                 historical_only=historical_only,
                 room=safe_room,
-                limit=self.core._normalize_limit(limit, default=5),
+                include_trace=include_trace,
             )
-            if item.get("text") and float(item.get("similarity", 0)) > 0
-        ]
-        return {
+        )
+        payload = {
             "query": query,
             "wing": safe_wing,
             "memory_tier": safe_memory_tier,
             "current_only": current_only,
             "historical_only": historical_only,
             "room": safe_room,
-            "results": results,
+            "count": len(rows),
+            "candidate_count": candidate_count,
+            "truncated_count": truncated_count,
+            "results": [self.core._format_public_hit(item) for item in rows],
         }
+        if retrieval_trace is not None:
+            payload["retrieval_trace"] = retrieval_trace
+        return payload
 
     def mcp_list_drawers(
         self,

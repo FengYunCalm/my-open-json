@@ -76,6 +76,26 @@ class BeliefPlaneService:
             (item for item in self._fetch_rows() if item.get("id") == belief_id), None
         )
 
+    def _parse_timestamp(self, value: str | None) -> datetime | None:
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    def _is_active_at(self, item: dict[str, Any], as_of: str) -> bool:
+        as_of_dt = self._parse_timestamp(as_of)
+        if as_of_dt is None:
+            return False
+        valid_from = self._parse_timestamp(item.get("valid_from"))
+        valid_to = self._parse_timestamp(item.get("valid_to"))
+        if valid_from is None or valid_from > as_of_dt:
+            return False
+        if valid_to is not None and valid_to <= as_of_dt:
+            return False
+        return True
+
     def _fetch_rows(self) -> list[dict[str, Any]]:
         if self.path is None:
             return list(self._facts)
@@ -121,6 +141,67 @@ class BeliefPlaneService:
             "fact_count": len(rows),
             "current_fact_count": current_count,
             "historical_fact_count": len(rows) - current_count,
+        }
+
+    def export_facts(self, *, limit: int | None = None) -> list[dict[str, Any]]:
+        rows = self._fetch_rows()
+        if limit is None:
+            return rows
+        return rows[: max(0, int(limit))]
+
+    def upsert_facts(self, facts: list[dict[str, Any]]) -> dict[str, Any]:
+        if not facts:
+            return {"upserted_count": 0}
+
+        existing_ids = {item.get("id") for item in self._fetch_rows() if item.get("id")}
+        records = []
+        for fact in facts:
+            if not fact.get("id"):
+                continue
+            records.append(
+                (
+                    fact["id"],
+                    fact.get("scope") or "project",
+                    fact.get("key") or "unknown",
+                    fact.get("value") or "unknown",
+                    fact.get("memory_tier") or "project_memory",
+                    fact.get("source_session"),
+                    fact.get("source_message_id"),
+                    fact.get("source_record_id"),
+                    int(fact.get("source_count") or 1),
+                    fact.get("last_confirmed_at"),
+                    fact.get("valid_from"),
+                    fact.get("valid_to"),
+                    fact.get("superseded_by"),
+                    fact.get("confidence"),
+                )
+            )
+
+        if self.path is None:
+            merged = {item.get("id"): item for item in self._facts if item.get("id")}
+            for fact in facts:
+                if fact.get("id"):
+                    merged[fact["id"]] = {**fact}
+            self._facts = list(merged.values())
+        else:
+            with self._connect() as connection:
+                connection.executemany(
+                    """
+                    INSERT OR REPLACE INTO belief_facts (
+                        id, scope, key, value, memory_tier, source_session,
+                        source_message_id, source_record_id, source_count,
+                        last_confirmed_at, valid_from, valid_to,
+                        superseded_by, confidence
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    records,
+                )
+
+        imported_ids = {fact.get("id") for fact in facts if fact.get("id")}
+        return {
+            "upserted_count": len(imported_ids),
+            "created_count": len(imported_ids - existing_ids),
+            "updated_count": len(imported_ids & existing_ids),
         }
 
     def promote(
@@ -263,6 +344,7 @@ class BeliefPlaneService:
         key: str | None = None,
         current_only: bool = False,
         historical_only: bool = False,
+        as_of: str | None = None,
         min_confidence: float | None = None,
         limit: int = 10,
     ) -> dict[str, Any]:
@@ -271,7 +353,9 @@ class BeliefPlaneService:
             rows = [item for item in rows if item.get("scope") == scope]
         if key is not None:
             rows = [item for item in rows if item.get("key") == key]
-        if current_only:
+        if as_of is not None:
+            rows = [item for item in rows if self._is_active_at(item, as_of)]
+        elif current_only:
             rows = [item for item in rows if not item.get("valid_to")]
         elif historical_only:
             rows = [item for item in rows if item.get("valid_to")]
@@ -294,6 +378,7 @@ class BeliefPlaneService:
             "key": key,
             "current_only": current_only,
             "historical_only": historical_only,
+            "as_of": as_of,
             "min_confidence": min_confidence,
             "count": len(rows[:limit]),
             "facts": rows[:limit],
