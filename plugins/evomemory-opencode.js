@@ -21,6 +21,13 @@ const DEFAULTS = {
   autoFlushOnMessage: true,
   autoFlushOnIdle: true,
   autoFlushOnCompact: true,
+  autoRunMaintenanceOnCompact: false,
+  searchIncludeTrace: false,
+  logRetrievalTrace: false,
+  maintenanceProfile: 'light',
+  maintenanceMinConfidence: 0.5,
+  maintenanceLimit: 20,
+  maintenanceThrottleMs: 300000,
   healthcheckCacheTtlMs: 1000,
   ensureBridgeCommand: ['bash', '-lc', 'systemctl --user start evomemory-bridge.service'],
 }
@@ -60,13 +67,39 @@ async function getMessages(client, sessionID) {
   return result.data ?? []
 }
 
-export const EvomemoryOpencodePlugin = async ({ client, directory, worktree }) => {
-  const config = loadConfig()
+export const EvomemoryOpencodePlugin = async ({ client, directory, worktree, configOverride }) => {
+  const config = { ...loadConfig(), ...(configOverride ?? {}) }
   const sessions = new Map()
+  let lastMaintenanceAt = 0
 
   const getDirectory = (sessionID) => sessions.get(sessionID)?.directory ?? worktree ?? directory
 
   await ensureBridge(config, client)
+
+  async function runMaintenance(sessionID) {
+    if (!config.autoRunMaintenanceOnCompact) return null
+    const now = Date.now()
+    const throttleMs = Math.max(0, Number(config.maintenanceThrottleMs ?? 0) || 0)
+    if (throttleMs > 0 && lastMaintenanceAt && now - lastMaintenanceAt < throttleMs) {
+      return { skipped: true, reason: 'throttled' }
+    }
+    if (!(await ensureBridge(config, client))) return null
+    const payload = await fetchJson(config.bridgeBaseUrl, '/internal/maintenance/run', {
+      method: 'POST',
+      body: JSON.stringify({
+        profile: config.maintenanceProfile ?? 'light',
+        min_confidence: Number(config.maintenanceMinConfidence ?? 0.5),
+        limit: Number(config.maintenanceLimit ?? 20),
+      }),
+    })
+    lastMaintenanceAt = now
+    await log(client, 'debug', 'EvoMemory maintenance completed', {
+      sessionID,
+      profile: payload?.profile ?? config.maintenanceProfile ?? 'light',
+      revisedCount: payload?.revision?.revised_count ?? 0,
+    })
+    return payload
+  }
 
   async function flushSession(sessionID, reason) {
     if (!(await ensureBridge(config, client))) return null
@@ -146,14 +179,32 @@ export const EvomemoryOpencodePlugin = async ({ client, directory, worktree }) =
       }
       if (!shouldSearch(text, config)) return
       if (!(await ensureBridge(config, client))) return
+      const includeTrace = Boolean(config.searchIncludeTrace || config.logRetrievalTrace)
       const search = await fetchJson(config.bridgeBaseUrl, '/internal/context/search', {
         method: 'POST',
-        body: JSON.stringify({ session_id: sessionID, directory: getDirectory(sessionID), query: text }),
+        body: JSON.stringify({
+          session_id: sessionID,
+          directory: getDirectory(sessionID),
+          query: text,
+          include_trace: includeTrace,
+        }),
       }).catch((error) => {
         log(client, 'warn', 'Context search failed', { sessionID, error: String(error) })
         return null
       })
       if (!search) return
+      if (config.logRetrievalTrace && search.retrieval_trace?.ranked_candidates?.length) {
+        const topCandidate = search.retrieval_trace.ranked_candidates.find((item) => item?.included) ?? search.retrieval_trace.ranked_candidates[0]
+        await log(client, 'debug', 'EvoMemory retrieval trace', {
+          sessionID,
+          query: text,
+          candidateCount: search.retrieval_trace.candidate_count,
+          returnedCount: search.retrieval_trace.returned_count,
+          topDrawerId: topCandidate?.drawer_id ?? null,
+          topReasons: topCandidate?.reasons ?? [],
+          topScores: topCandidate?.scores ?? {},
+        })
+      }
       const latest = sessions.get(sessionID) ?? { directory: getDirectory(sessionID) }
       sessions.set(sessionID, {
         ...latest,
@@ -176,6 +227,9 @@ export const EvomemoryOpencodePlugin = async ({ client, directory, worktree }) =
       })
       if (payload) {
         output.context.push('Recent conversation was persisted to EvoMemory before compaction.')
+        await runMaintenance(sessionID).catch((error) => {
+          log(client, 'warn', 'Compaction maintenance failed', { sessionID, error: String(error) })
+        })
       }
     },
   }

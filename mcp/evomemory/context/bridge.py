@@ -43,8 +43,11 @@ from evomemory.domain.memory_policy import (
     should_skip_memory_capture,
 )
 from evomemory.context.query_service import ContextQueryService
+from evomemory.context.archive_service import MemoryArchiveService
+from evomemory.context.retrieval_service import ContextRetrievalService
 from evomemory.context.repository import ContextRepository
 from evomemory.context.session_service import SessionLifecycleService
+from evomemory.context.timeline_service import MemoryTimelineService
 from evomemory.belief import BeliefPlaneService, MemoryPromoter, MemoryReviser
 from evomemory.evaluation import EvaluationPlaneService
 from evomemory.governance import GovernancePlaneService
@@ -92,6 +95,8 @@ def _default_runtime_state() -> dict[str, Any]:
         "last_reconcile_stale_belief_count": 0,
         "last_reconcile_gene_count": 0,
         "last_reconcile_capsule_count": 0,
+        "last_maintenance_at": None,
+        "last_maintenance_profile": None,
     }
 
 
@@ -532,6 +537,24 @@ class EvoMemoryBackend:
         collection.upsert(ids=[drawer_id], documents=[content], metadatas=[payload])
         return {"drawer_id": drawer_id, "wing": wing, "room": room, "metadata": payload}
 
+    def import_drawers(self, drawers: list[dict[str, Any]]) -> dict[str, Any]:
+        if not drawers:
+            return {"imported_count": 0, "skipped_count": 0, "drawers": []}
+        collection = self._collection_for(create=True)
+        ids = []
+        documents = []
+        metadatas = []
+        for item in drawers:
+            drawer_id = item.get("drawer_id")
+            if not drawer_id:
+                continue
+            ids.append(drawer_id)
+            documents.append(sanitize_content(item.get("text") or item.get("content") or ""))
+            metadatas.append(_normalize_metadata(dict(item.get("metadata") or {})))
+        if ids:
+            collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
+        return {"imported_count": len(ids), "skipped_count": 0, "drawers": ids}
+
     def invalidate_memory_conflicts(
         self,
         *,
@@ -931,6 +954,10 @@ class BridgeCore:
         self.sanitize_optional_name = _sanitize_optional_name
         self.sanitize_optional_role = _sanitize_optional_role
         self.sanitize_optional_memory_tier = _sanitize_optional_memory_tier
+        self.global_memory_wing = GLOBAL_MEMORY_WING
+        self.archive_service = MemoryArchiveService(self)
+        self.retrieval_service = ContextRetrievalService(self)
+        self.timeline_service = MemoryTimelineService(self)
         self.session_service = SessionLifecycleService(self)
         self.query_service = ContextQueryService(self)
         self.belief_service = BeliefPlaneService(self.config.state_path)
@@ -1047,6 +1074,9 @@ class BridgeCore:
             "filed_at": item.get("filed_at"),
             "similarity": item.get("similarity", 0),
             "distance": item.get("distance"),
+            "reason_summary": item.get("reason_summary"),
+            "retrieval_scores": item.get("retrieval_scores"),
+            "search_tier": item.get("search_tier"),
         }
 
     def _format_context_hit(self, item: dict[str, Any]) -> dict[str, Any]:
@@ -1070,6 +1100,8 @@ class BridgeCore:
             "filed_at": item.get("filed_at"),
             "search_tier": item.get("search_tier"),
             "similarity": item.get("similarity", 0),
+            "reason_summary": item.get("reason_summary"),
+            "retrieval_scores": item.get("retrieval_scores"),
         }
 
     def _append_block_lines(
@@ -1335,10 +1367,14 @@ class BridgeCore:
         return self.session_service.start_session(session_id, directory)
 
     def search_context(
-        self, query: str, directory: str, session_id: str | None = None
+        self,
+        query: str,
+        directory: str,
+        session_id: str | None = None,
+        include_trace: bool = False,
     ) -> dict[str, Any]:
         return self.query_service.search_context(
-            query, directory, session_id=session_id
+            query, directory, session_id=session_id, include_trace=include_trace
         )
 
     def flush_session(
@@ -1384,6 +1420,7 @@ class BridgeCore:
         current_only: bool = False,
         historical_only: bool = False,
         room: str | None = None,
+        include_trace: bool = False,
     ) -> dict[str, Any]:
         return self.query_service.mcp_search(
             query=query,
@@ -1393,6 +1430,7 @@ class BridgeCore:
             current_only=current_only,
             historical_only=historical_only,
             room=room,
+            include_trace=include_trace,
         )
 
     def mcp_list_drawers(
@@ -1480,6 +1518,7 @@ class BridgeCore:
                 for timestamp in [
                     self.runtime.get("last_revision_at"),
                     self.runtime.get("last_reconcile_at"),
+                    self.runtime.get("last_maintenance_at"),
                 ]
                 if timestamp
             ],
@@ -1527,6 +1566,8 @@ class BridgeCore:
             "last_reconcile_capsule_count": int(
                 self.runtime.get("last_reconcile_capsule_count") or 0
             ),
+            "last_maintenance_at": self.runtime.get("last_maintenance_at"),
+            "last_maintenance_profile": self.runtime.get("last_maintenance_profile"),
         }
 
     def evomemory_query_beliefs(
@@ -1535,6 +1576,7 @@ class BridgeCore:
         key: str | None = None,
         current_only: bool = False,
         historical_only: bool = False,
+        as_of: str | None = None,
         min_confidence: float | None = None,
         limit: int = 10,
     ) -> dict[str, Any]:
@@ -1543,8 +1585,24 @@ class BridgeCore:
             key=key,
             current_only=current_only,
             historical_only=historical_only,
+            as_of=as_of,
             min_confidence=min_confidence,
             limit=self._normalize_limit(limit, default=10),
+        )
+
+    def evomemory_query_timeline(
+        self,
+        *,
+        scope: str | None = None,
+        key: str,
+        as_of: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        return self.timeline_service.query_timeline(
+            scope=scope,
+            key=key,
+            as_of=as_of,
+            limit=self._normalize_limit(limit, default=20),
         )
 
     def evomemory_query_genes(
@@ -1911,6 +1969,43 @@ class BridgeCore:
             "repaired_capsules": repaired["capsules"],
         }
 
+    def evomemory_run_maintenance(
+        self,
+        *,
+        profile: str = "light",
+        min_confidence: float = 0.5,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        normalized_profile = str(profile or "light").strip().lower() or "light"
+        if normalized_profile not in {"light", "full"}:
+            raise ValueError(f"Unsupported maintenance profile: {profile}")
+
+        normalized_limit = self._normalize_limit(limit, default=20)
+        revision = self.evomemory_run_revision(min_confidence=min_confidence)
+        snapshot = None
+        benchmark = None
+        if normalized_profile == "full":
+            snapshot = self.evomemory_export_snapshot(limit=normalized_limit)
+            benchmark = self.evomemory_run_benchmark(limit=normalized_limit)
+
+        maintenance_at = datetime.now(timezone.utc).isoformat()
+        self.runtime["last_maintenance_at"] = maintenance_at
+        self.runtime["last_maintenance_profile"] = normalized_profile
+        self._persist_runtime_state()
+
+        self.evaluation_service.increment("maintenance_runs")
+        self.evaluation_service.increment(f"maintenance_{normalized_profile}_runs")
+
+        return {
+            "profile": normalized_profile,
+            "min_confidence": float(min_confidence),
+            "limit": normalized_limit,
+            "revision": revision,
+            "snapshot": snapshot,
+            "benchmark": benchmark,
+            "maintenance_summary": self.maintenance_summary(),
+        }
+
     def evomemory_reconcile_governance(self) -> dict[str, Any]:
         stale_belief_ids = list(
             dict.fromkeys(
@@ -1964,8 +2059,22 @@ class BridgeCore:
         from evomemory.evaluation import BenchmarkRunner
 
         snapshot = self.evomemory_export_snapshot(limit=limit)
+        snapshot["archive"] = self.evomemory_export_archive(limit=limit)
         result = BenchmarkRunner().run(snapshot)
         return {
             **result,
             "limit": self._normalize_limit(limit, default=20),
         }
+
+    def evomemory_export_archive(self, *, limit: int = 20) -> dict[str, Any]:
+        return self.archive_service.export_archive(
+            limit=self._normalize_limit(limit, default=20)
+        )
+
+    def evomemory_import_archive(
+        self,
+        *,
+        archive: dict[str, Any],
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        return self.archive_service.import_archive(archive=archive, dry_run=dry_run)

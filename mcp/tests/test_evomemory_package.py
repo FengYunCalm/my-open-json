@@ -1594,6 +1594,7 @@ def test_benchmark_runner_scores_snapshot_health():
     assert benchmark["scenario_checks"]["runtime_block_within_budget"] is True
     assert benchmark["scenario_checks"]["runtime_top_belief_retained"] is True
     assert benchmark["scenario_checks"]["runtime_top_gene_retained"] is True
+    assert benchmark["scenario_checks"]["archive_export_ready"] is True
     assert benchmark["scenario_summary"]["captured_belief_keys"] == [
         "git_commit_behavior",
         "response_language",
@@ -1625,6 +1626,8 @@ def test_benchmark_runner_scores_snapshot_health():
         "runtime_base_min_chars": 80,
     }
     assert benchmark["scenario_summary"]["budget_policy_diff"] == {}
+    assert benchmark["scenario_summary"]["archive_format"] == "evomemory-archive-v1"
+    assert benchmark["scenario_summary"]["archive_belief_count"] >= 2
 
 
 def test_benchmark_runner_detects_runtime_items_dropped_by_small_budget():

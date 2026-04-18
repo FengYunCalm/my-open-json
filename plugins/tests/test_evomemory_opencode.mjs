@@ -209,3 +209,141 @@ test('does not flush evomemory on tiny chinese chatter', async () => {
     globalThis.fetch = originalFetch
   }
 })
+
+test('forwards include_trace and logs retrieval trace when enabled', async () => {
+  const originalFetch = globalThis.fetch
+  const calls = []
+  const logs = []
+
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options })
+    if (String(url).endsWith('/health')) {
+      return {
+        ok: true,
+        json: async () => ({ ok: true }),
+      }
+    }
+
+    if (String(url).endsWith('/internal/context/search')) {
+      return {
+        ok: true,
+        json: async () => ({
+          wing: 'opencode',
+          system_block: 'bridge supplied block',
+          results: [],
+          retrieval_trace: {
+            candidate_count: 3,
+            returned_count: 2,
+            ranked_candidates: [
+              {
+                drawer_id: 'drawer_trace_top',
+                included: true,
+                reasons: ['keyword(git, commit)', 'tier(session)'],
+                scores: { total: 0.91 },
+              },
+            ],
+          },
+        }),
+      }
+    }
+
+    throw new Error(`unexpected url: ${url}`)
+  }
+
+  try {
+    const plugin = await EvomemoryOpencodePlugin({
+      client: {
+        app: { log: async (entry) => logs.push(entry.body) },
+        session: { messages: async () => ({ data: [] }) },
+      },
+      directory: '/home/mechrevo/.config/opencode',
+      worktree: '/home/mechrevo/.config/opencode',
+      configOverride: {
+        searchIncludeTrace: true,
+        logRetrievalTrace: true,
+      },
+    })
+
+    await plugin['chat.message'](
+      { sessionID: 'ses_trace' },
+      { parts: [{ type: 'text', text: 'what did we decide earlier about git commit behavior' }] },
+    )
+
+    const searchCall = calls.find((entry) => entry.url.endsWith('/internal/context/search'))
+    assert.ok(searchCall)
+    const body = JSON.parse(searchCall.options.body)
+    assert.equal(body.include_trace, true)
+    assert.ok(logs.some((entry) => entry.message === 'EvoMemory retrieval trace'))
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('runs maintenance after compaction when enabled', async () => {
+  const originalFetch = globalThis.fetch
+  const calls = []
+
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options })
+    if (String(url).endsWith('/health')) {
+      return {
+        ok: true,
+        json: async () => ({ ok: true }),
+      }
+    }
+
+    if (String(url).endsWith('/internal/session/flush')) {
+      return {
+        ok: true,
+        json: async () => ({ last_saved_message_id: 'msg_compact_1' }),
+      }
+    }
+
+    if (String(url).endsWith('/internal/maintenance/run')) {
+      return {
+        ok: true,
+        json: async () => ({ profile: 'light', revision: { revised_count: 0 } }),
+      }
+    }
+
+    throw new Error(`unexpected url: ${url}`)
+  }
+
+  try {
+    const plugin = await EvomemoryOpencodePlugin({
+      client: {
+        app: { log: async () => {} },
+        session: {
+          messages: async () => ({
+            data: [
+              {
+                info: { id: 'msg_compact_1', role: 'user' },
+                parts: [{ type: 'text', text: 'remember this compacted context' }],
+              },
+            ],
+          }),
+        },
+      },
+      directory: '/home/mechrevo/.config/opencode',
+      worktree: '/home/mechrevo/.config/opencode',
+      configOverride: {
+        autoRunMaintenanceOnCompact: true,
+        maintenanceProfile: 'light',
+        maintenanceMinConfidence: 0.7,
+        maintenanceLimit: 10,
+      },
+    })
+
+    const output = { context: [] }
+    await plugin['experimental.session.compacting']({ sessionID: 'ses_compact' }, output)
+
+    const maintenanceCall = calls.find((entry) => entry.url.endsWith('/internal/maintenance/run'))
+    assert.ok(maintenanceCall)
+    const body = JSON.parse(maintenanceCall.options.body)
+    assert.equal(body.profile, 'light')
+    assert.equal(body.min_confidence, 0.7)
+    assert.equal(body.limit, 10)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})

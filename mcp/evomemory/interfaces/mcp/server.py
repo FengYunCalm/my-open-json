@@ -43,6 +43,7 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
         current_only: bool = False,
         historical_only: bool = False,
         room: str | None = None,
+        include_trace: bool = False,
     ) -> dict[str, Any]:
         return core.mcp_search(
             query=query,
@@ -52,6 +53,7 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
             current_only=current_only,
             historical_only=historical_only,
             room=room,
+            include_trace=include_trace,
         )
 
     @server.tool(name="evomemory_list_drawers")
@@ -124,8 +126,14 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
         query: str,
         directory: str,
         session_id: str | None = None,
+        include_trace: bool = False,
     ) -> dict[str, Any]:
-        return core.search_context(query, directory, session_id=session_id)
+        return core.search_context(
+            query,
+            directory,
+            session_id=session_id,
+            include_trace=include_trace,
+        )
 
     @server.tool(name="evomemory_query_beliefs")
     def evomemory_query_beliefs(
@@ -133,6 +141,7 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
         key: str | None = None,
         current_only: bool = False,
         historical_only: bool = False,
+        as_of: str | None = None,
         min_confidence: float | None = None,
         limit: int = 10,
     ) -> dict[str, Any]:
@@ -141,7 +150,22 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
             key=key,
             current_only=current_only,
             historical_only=historical_only,
+            as_of=as_of,
             min_confidence=min_confidence,
+            limit=limit,
+        )
+
+    @server.tool(name="evomemory_query_timeline")
+    def evomemory_query_timeline(
+        key: str,
+        scope: str | None = None,
+        as_of: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        return core.evomemory_query_timeline(
+            scope=scope,
+            key=key,
+            as_of=as_of,
             limit=limit,
         )
 
@@ -213,6 +237,18 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
     def evomemory_run_revision(min_confidence: float = 0.5) -> dict[str, Any]:
         return core.evomemory_run_revision(min_confidence=min_confidence)
 
+    @server.tool(name="evomemory_run_maintenance")
+    def evomemory_run_maintenance(
+        profile: str = "light",
+        min_confidence: float = 0.5,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        return core.evomemory_run_maintenance(
+            profile=profile,
+            min_confidence=min_confidence,
+            limit=limit,
+        )
+
     @server.tool(name="evomemory_reconcile_governance")
     def evomemory_reconcile_governance() -> dict[str, Any]:
         return core.evomemory_reconcile_governance()
@@ -224,6 +260,17 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
     @server.tool(name="evomemory_export_snapshot")
     def evomemory_export_snapshot(limit: int = 20) -> dict[str, Any]:
         return core.evomemory_export_snapshot(limit=limit)
+
+    @server.tool(name="evomemory_export_archive")
+    def evomemory_export_archive(limit: int = 20) -> dict[str, Any]:
+        return core.evomemory_export_archive(limit=limit)
+
+    @server.tool(name="evomemory_import_archive")
+    def evomemory_import_archive(
+        archive: dict[str, Any],
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        return core.evomemory_import_archive(archive=archive, dry_run=dry_run)
 
     @server.tool(name="evomemory_run_benchmark")
     def evomemory_run_benchmark(limit: int = 20) -> dict[str, Any]:
@@ -264,6 +311,7 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
                 payload["query"],
                 payload["directory"],
                 session_id=payload.get("session_id"),
+                include_trace=bool(payload.get("include_trace", False)),
             )
         )
 
@@ -289,6 +337,19 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
         return JSONResponse(
             core.compact_session(
                 payload["session_id"], payload["directory"], payload.get("messages", [])
+            )
+        )
+
+    @server.custom_route(
+        "/internal/maintenance/run", methods=["POST"], include_in_schema=False
+    )
+    async def maintenance_run_route(request: Request):
+        payload = await request.json()
+        return JSONResponse(
+            core.evomemory_run_maintenance(
+                profile=payload.get("profile", "light"),
+                min_confidence=float(payload.get("min_confidence", 0.5)),
+                limit=int(payload.get("limit", 20)),
             )
         )
 

@@ -29,6 +29,7 @@ Examples shipped with this package:
 - `evomemory_query_graph`
 - `evomemory_search_context`
 - `evomemory_query_beliefs`
+- `evomemory_query_timeline`
 - `evomemory_query_genes`
 - `evomemory_query_capsules`
 - `evomemory_list_evolution_events`
@@ -36,15 +37,18 @@ Examples shipped with this package:
 - `evomemory_list_feedback`
 - `evomemory_record_feedback`
 - `evomemory_run_revision`
+- `evomemory_run_maintenance`
 - `evomemory_export_snapshot`
+- `evomemory_export_archive`
+- `evomemory_import_archive`
 - `evomemory_run_benchmark`
 
 ## Current plane coverage
 
-- **context-plane**: session flush, search, compaction, message replay, scoped retrieval
-- **belief-plane**: promotion, reaffirmation, confidence, low-confidence stale sweep
+- **context-plane**: session flush, search, compaction, message replay, scoped retrieval, retrieval trace
+- **belief-plane**: promotion, reaffirmation, confidence, low-confidence stale sweep, point-in-time lookup, timeline view
 - **governance-plane**: gene/capsule creation, score, stale state, demotion, events
-- **evaluation-plane**: counters, feedback ledger, snapshot export, benchmark runner
+- **evaluation-plane**: counters, feedback ledger, snapshot export, archive export/import, benchmark runner, unified maintenance entry
 
 ## OpenCode plugin notes
 
@@ -53,6 +57,12 @@ Examples shipped with this package:
 - `evomemory` keeps the core memory engine in MCP; the plugin layer should stay thin and focus on lifecycle hooks and prompt orchestration.
 - Canonical plugin entry:
   - `plugins/evomemory-opencode.js`
+- Plugin config toggles live in:
+  - `plugins/evomemory-opencode.config.json`
+- New optional plugin toggles:
+  - `searchIncludeTrace` / `logRetrievalTrace`: ask the bridge for retrieval trace and emit debug logs for the top-ranked candidate
+  - `autoRunMaintenanceOnCompact`: run `evomemory_run_maintenance` after compaction flush
+  - `maintenanceProfile`, `maintenanceMinConfidence`, `maintenanceLimit`, `maintenanceThrottleMs`: tune compaction-triggered maintenance behavior
 
 ## Why MCP first
 
