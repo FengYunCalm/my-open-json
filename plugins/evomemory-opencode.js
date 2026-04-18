@@ -50,9 +50,10 @@ async function log(client, level, message, extra = undefined) {
 }
 
 async function fetchJson(baseUrl, pathname, options = {}) {
-  const response = await fetch(`${baseUrl}${pathname}`, {
+  const { fetchImpl = globalThis.fetch, ...requestOptions } = options
+  const response = await fetchImpl(`${baseUrl}${pathname}`, {
     headers: { 'Content-Type': 'application/json' },
-    ...options,
+    ...requestOptions,
   })
   if (!response.ok) {
     const text = await response.text()
@@ -67,14 +68,21 @@ async function getMessages(client, sessionID) {
   return result.data ?? []
 }
 
-export const EvomemoryOpencodePlugin = async ({ client, directory, worktree, configOverride }) => {
+export const EvomemoryOpencodePlugin = async ({ client, directory, worktree, configOverride, fetchImpl, spawnImpl, sleepImpl, now, logImpl } = {}) => {
   const config = { ...loadConfig(), ...(configOverride ?? {}) }
   const sessions = new Map()
   let lastMaintenanceAt = 0
+  const dependencies = {
+    fetchImpl,
+    spawnImpl,
+    sleepImpl,
+    now,
+    logImpl,
+  }
 
   const getDirectory = (sessionID) => sessions.get(sessionID)?.directory ?? worktree ?? directory
 
-  await ensureBridge(config, client)
+  await ensureBridge(config, client, dependencies)
 
   async function runMaintenance(sessionID) {
     if (!config.autoRunMaintenanceOnCompact) return null
@@ -83,7 +91,7 @@ export const EvomemoryOpencodePlugin = async ({ client, directory, worktree, con
     if (throttleMs > 0 && lastMaintenanceAt && now - lastMaintenanceAt < throttleMs) {
       return { skipped: true, reason: 'throttled' }
     }
-    if (!(await ensureBridge(config, client))) return null
+    if (!(await ensureBridge(config, client, dependencies))) return null
     const payload = await fetchJson(config.bridgeBaseUrl, '/internal/maintenance/run', {
       method: 'POST',
       body: JSON.stringify({
@@ -91,6 +99,7 @@ export const EvomemoryOpencodePlugin = async ({ client, directory, worktree, con
         min_confidence: Number(config.maintenanceMinConfidence ?? 0.5),
         limit: Number(config.maintenanceLimit ?? 20),
       }),
+      fetchImpl: dependencies.fetchImpl,
     })
     lastMaintenanceAt = now
     await log(client, 'debug', 'EvoMemory maintenance completed', {
@@ -102,7 +111,7 @@ export const EvomemoryOpencodePlugin = async ({ client, directory, worktree, con
   }
 
   async function flushSession(sessionID, reason) {
-    if (!(await ensureBridge(config, client))) return null
+    if (!(await ensureBridge(config, client, dependencies))) return null
     const sessionState = sessions.get(sessionID) ?? { directory: getDirectory(sessionID) }
     const messages = await getMessages(client, sessionID)
     const latestMessageID = messages.at(-1)?.info?.id
@@ -121,6 +130,7 @@ export const EvomemoryOpencodePlugin = async ({ client, directory, worktree, con
         messages: pending,
         reason,
       }),
+      fetchImpl: dependencies.fetchImpl,
     })
     sessions.set(sessionID, {
       ...sessionState,
@@ -135,10 +145,11 @@ export const EvomemoryOpencodePlugin = async ({ client, directory, worktree, con
       if (event.type === 'session.created') {
         const info = event.properties.info
         sessions.set(info.id, { directory: info.directory })
-        if (await ensureBridge(config, client)) {
+        if (await ensureBridge(config, client, dependencies)) {
           await fetchJson(config.bridgeBaseUrl, '/internal/session/start', {
             method: 'POST',
             body: JSON.stringify({ session_id: info.id, directory: info.directory }),
+            fetchImpl: dependencies.fetchImpl,
           }).catch(() => {})
         }
         return
@@ -180,7 +191,7 @@ export const EvomemoryOpencodePlugin = async ({ client, directory, worktree, con
         )
       }
       if (!shouldSearch(text, config)) return
-      if (!(await ensureBridge(config, client))) return
+      if (!(await ensureBridge(config, client, dependencies))) return
       const includeTrace = Boolean(config.searchIncludeTrace || config.logRetrievalTrace)
       const search = await fetchJson(config.bridgeBaseUrl, '/internal/context/search', {
         method: 'POST',
@@ -190,6 +201,7 @@ export const EvomemoryOpencodePlugin = async ({ client, directory, worktree, con
           query: text,
           include_trace: includeTrace,
         }),
+        fetchImpl: dependencies.fetchImpl,
       }).catch((error) => {
         log(client, 'warn', 'Context search failed', { sessionID, error: String(error) })
         return null
