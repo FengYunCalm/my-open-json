@@ -1,7 +1,26 @@
 import path from 'path'
 import fs from 'fs'
 
-const SMALL_TALK = new Set(['ok', 'okay', 'yes', 'no', 'thanks', 'thank you', 'continue', 'start', 'go'])
+const SMALL_TALK_PATTERNS = [
+  /^ok$/i,
+  /^okay$/i,
+  /^yes$/i,
+  /^no$/i,
+  /^thanks?$/i,
+  /^thank you$/i,
+  /^continue$/i,
+  /^start$/i,
+  /^go$/i,
+  /^好$/,
+  /^好的$/,
+  /^行$/,
+  /^收到$/,
+  /^继续$/,
+  /^开始$/,
+  /^谢谢$/,
+  /^嗯$/,
+  /^嗯嗯$/,
+]
 const HISTORY_HINTS = [
   /\b(prior|previous|earlier|past|history|historical|remember|remind|decisions?|preferences?|constraint|constraints|feedback|benchmark)\b/i,
   /\bwhat did we decide\b/i,
@@ -27,12 +46,34 @@ export function collectText(parts = []) {
     .join('\n\n')
 }
 
+function normalizeText(text = '') {
+  return (text || '').trim().replace(/[!?！？。,.]+$/g, '')
+}
+
+export function isLikelySmallTalk(text = '') {
+  const normalized = normalizeText(text)
+  if (!normalized) return true
+  if (normalized.length > 24) return false
+  return SMALL_TALK_PATTERNS.some((pattern) => pattern.test(normalized))
+}
+
+function shouldIgnore(text = '') {
+  const normalized = normalizeText(text)
+  if (!normalized) return true
+  if (normalized.startsWith('/')) return true
+  if (normalized.includes('<command-message>')) return true
+  if (isLikelySmallTalk(text)) return true
+  return false
+}
+
+export function shouldPersist(text, config = {}) {
+  if (shouldIgnore(text)) return false
+  return normalizeText(text).length >= (config.minPersistChars ?? 8)
+}
+
 export function shouldSearch(text, config = {}) {
-  const normalized = (text || '').trim().toLowerCase()
-  if (!normalized) return false
-  if (normalized.startsWith('/')) return false
-  if (normalized.includes('<command-message>')) return false
-  if (SMALL_TALK.has(normalized)) return false
+  const normalized = normalizeText(text)
+  if (shouldIgnore(text)) return false
   if (normalized.length < (config.minSearchChars ?? 16)) return false
 
   const hasHistoryHint = HISTORY_HINTS.some((pattern) => pattern.test(text || ''))

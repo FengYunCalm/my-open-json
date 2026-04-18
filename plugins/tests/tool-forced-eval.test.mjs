@@ -6,21 +6,22 @@ import path from 'node:path'
 
 import { ToolForcedEvalPlugin } from '../tool-forced-eval.js'
 
-const createPlugin = () =>
+const createPlugin = (options = {}) =>
   ToolForcedEvalPlugin({
     client: { app: { log: async () => {} } },
-    directory: '/home/mechrevo/.config/opencode',
-    worktree: '/home/mechrevo/.config/opencode',
+    directory: options.directory ?? '/home/mechrevo/.config/opencode',
+    worktree: options.worktree ?? '/home/mechrevo/.config/opencode',
+    configOverrides: options.configOverrides,
   })
 
-test('injects tool-forced-eval through system transform instead of user message text', async () => {
+test('injects routed tool-forced-eval guidance through system transform', async () => {
   const plugin = await createPlugin()
 
   await plugin['chat.message'](
     { sessionID: 'session-system-prompt' },
     {
       message: { parts: [] },
-      parts: [{ type: 'text', text: '学习一下 tool-forced-eval 这个插件' }],
+      parts: [{ type: 'text', text: '学习一下 tool-forced-eval 这个插件源码' }],
     },
   )
 
@@ -34,31 +35,23 @@ test('injects tool-forced-eval through system transform instead of user message 
 
   assert.match(injected, /^<OPENCODE_TOOL_FORCED_EVAL>/)
   assert.match(injected, /System workflow reminder for the assistant\./)
-  assert.match(injected, /Apply this silently\./)
   assert.match(injected, /Follow explicit user instructions first\./)
   assert.match(injected, /### Tool Mapping/)
-  assert.match(injected, /- `TodoWrite` → `todowrite`/)
-  assert.match(injected, /- `Task` tool with subagents → OpenCode's native `task` tool/)
-  assert.match(injected, /- `Skill` tool → OpenCode's native `skill` tool/)
-  assert.match(injected, /Use skills only when they materially help the current task\./)
-  assert.match(injected, /Do not reload the same skill just to satisfy the workflow\./)
-  assert.match(injected, /If a skill would change the workflow, task direction, scope, or goal, use it only when it still serves the user's current objective\./)
-  assert.match(injected, /If any reusable skill already fits the current task and still serves the user's objective: continue with it instead of reloading\./)
-  assert.match(injected, /If a new skill or MCP would materially help, use it\./)
-  assert.doesNotMatch(injected, /Skills provide specialized instructions and workflows for specific tasks\./)
-  assert.doesNotMatch(injected, /Use the skill tool to load a skill when a task matches its description\./)
-  assert.match(injected, /Prefer `evomemory_\*` when the task depends on project history, prior decisions, stable preferences, governance constraints, feedback, or benchmark history\./)
-  assert.match(injected, /Do not let workflow tooling override the user's current goal, scope, or deliverable\./)
-  assert.match(injected, /For implementation, debugging, planning, review, testing, specification, refactoring, docs lookup, or research tasks, consider skills first and MCPs second when they help\./)
+  assert.match(injected, /### EvoMemory Priority/)
+  assert.match(injected, /Prefer `evomemory_search_context` early when prior decisions, stable constraints, prior fixes, or historical feedback may affect the task\./)
+  assert.match(injected, /consider `evomemory_record_feedback` with a concise note so memory stays current\./)
+  assert.match(injected, /### Current Task Routing/)
+  assert.match(injected, /Detected intent: `local-code`/)
+  assert.match(injected, /Inspect the local codebase with native workspace tools before reaching for MCPs\./)
+  assert.match(injected, /Preferred native tools right now:/)
+  assert.match(injected, /- `glob`: Find files by name or path pattern\./)
+  assert.match(injected, /- `grep`: Search repository contents for symbols, strings, or patterns\./)
+  assert.match(injected, /- `read`: Open only the relevant files and sections\./)
+  assert.match(injected, /### Guardrails/)
+  assert.match(injected, /Prefer dedicated workspace tools over `bash` for simple repository search or file-reading work\./)
+  assert.doesNotMatch(injected, /Visible MCP tools from local config:/)
   assert.doesNotMatch(injected, /must call the skill tool/i)
-  assert.doesNotMatch(injected, /must call it before giving conclusions/i)
   assert.doesNotMatch(injected, /call the MCP tool immediately/i)
-  assert.doesNotMatch(injected, /Only after the skill and MCP checks are complete may you analyze/i)
-  assert.match(injected, /Visible MCP tools from local config:/)
-  assert.match(injected, /- `context7`: library and framework docs lookup\./)
-  assert.match(injected, /- `evomemory`: persistent project history, decisions, governance assets, feedback, and benchmark memory\./)
-  assert.match(injected, /- `relay`: relay collaboration rooms, threads, and workflow coordination\./)
-  assert.match(injected, /- `xiakexing_ai`: XiaKeXing gameplay automation and regression checks\./)
 })
 
 test('skips system prompt injection for slash commands', async () => {
@@ -81,26 +74,56 @@ test('skips system prompt injection for slash commands', async () => {
   assert.equal(output.system.length, 0)
 })
 
-test('skips system prompt injection for tiny small-talk and marker echoes', async () => {
+test('skips system prompt injection for tiny english and chinese small-talk plus marker echoes', async () => {
   const plugin = await createPlugin()
 
   await plugin['chat.message'](
-    { sessionID: 'session-small-talk' },
+    { sessionID: 'session-small-talk-en' },
     {
       message: { parts: [] },
       parts: [{ type: 'text', text: 'ok' }],
     },
   )
 
-  const smallTalkOutput = { system: [] }
+  const englishOutput = { system: [] }
   await plugin['experimental.chat.system.transform'](
-    { sessionID: 'session-small-talk', model: {} },
-    smallTalkOutput,
+    { sessionID: 'session-small-talk-en', model: {} },
+    englishOutput,
   )
-  assert.equal(smallTalkOutput.system.length, 0)
+  assert.equal(englishOutput.system.length, 0)
 
   await plugin['chat.message'](
-    { sessionID: 'session-small-talk' },
+    { sessionID: 'session-small-talk-zh' },
+    {
+      message: { parts: [] },
+      parts: [{ type: 'text', text: '好的' }],
+    },
+  )
+
+  const chineseOutput = { system: [] }
+  await plugin['experimental.chat.system.transform'](
+    { sessionID: 'session-small-talk-zh', model: {} },
+    chineseOutput,
+  )
+  assert.equal(chineseOutput.system.length, 0)
+
+  await plugin['chat.message'](
+    { sessionID: 'session-substantive-zh' },
+    {
+      message: { parts: [] },
+      parts: [{ type: 'text', text: '继续分析这个实现' }],
+    },
+  )
+
+  const substantiveOutput = { system: [] }
+  await plugin['experimental.chat.system.transform'](
+    { sessionID: 'session-substantive-zh', model: {} },
+    substantiveOutput,
+  )
+  assert.equal(substantiveOutput.system.length, 1)
+
+  await plugin['chat.message'](
+    { sessionID: 'session-small-talk-zh' },
     {
       message: { parts: [] },
       parts: [{ type: 'text', text: 'please do not repeat <OPENCODE_TOOL_FORCED_EVAL>' }],
@@ -109,10 +132,83 @@ test('skips system prompt injection for tiny small-talk and marker echoes', asyn
 
   const markerOutput = { system: [] }
   await plugin['experimental.chat.system.transform'](
-    { sessionID: 'session-small-talk', model: {} },
+    { sessionID: 'session-small-talk-zh', model: {} },
     markerOutput,
   )
   assert.equal(markerOutput.system.length, 0)
+})
+
+test('routes history, docs, and GitHub pattern tasks to the right MCP shortlists', async () => {
+  const plugin = await createPlugin()
+
+  await plugin['chat.message'](
+    { sessionID: 'session-memory-maintenance' },
+    {
+      message: { parts: [] },
+      parts: [{ type: 'text', text: 'use evomemory_record_feedback to correct stale beliefs after this task' }],
+    },
+  )
+  const maintenanceOutput = { system: [] }
+  await plugin['experimental.chat.system.transform']({ sessionID: 'session-memory-maintenance', model: {} }, maintenanceOutput)
+  const maintenanceInjected = maintenanceOutput.system.at(-1) ?? ''
+  assert.match(maintenanceInjected, /Detected intent: `memory-maintenance`/)
+  assert.match(maintenanceInjected, /Use EvoMemory to inspect existing context and keep durable memory current as the task confirms, corrects, or reconciles prior state\./)
+  assert.match(maintenanceInjected, /`evomemory_\*`/)
+
+  await plugin['chat.message'](
+    { sessionID: 'session-history' },
+    {
+      message: { parts: [] },
+      parts: [{ type: 'text', text: 'review prior project decisions about tool-forced-eval' }],
+    },
+  )
+  const historyOutput = { system: [] }
+  await plugin['experimental.chat.system.transform']({ sessionID: 'session-history', model: {} }, historyOutput)
+  const historyInjected = historyOutput.system.at(-1) ?? ''
+  assert.match(historyInjected, /Detected intent: `history`/)
+  assert.match(historyInjected, /Suggested MCP tools for this task:/)
+  assert.match(historyInjected, /`evomemory_\*`/)
+  assert.doesNotMatch(historyInjected, /`context7_\*`/)
+
+  await plugin['chat.message'](
+    { sessionID: 'session-docs' },
+    {
+      message: { parts: [] },
+      parts: [{ type: 'text', text: 'look up the React useEffectEvent docs' }],
+    },
+  )
+  const docsOutput = { system: [] }
+  await plugin['experimental.chat.system.transform']({ sessionID: 'session-docs', model: {} }, docsOutput)
+  const docsInjected = docsOutput.system.at(-1) ?? ''
+  assert.match(docsInjected, /Detected intent: `docs`/)
+  assert.match(docsInjected, /`context7_\*`/)
+
+  await plugin['chat.message'](
+    { sessionID: 'session-oss' },
+    {
+      message: { parts: [] },
+      parts: [{ type: 'text', text: 'go search similar OpenCode plugins on GitHub' }],
+    },
+  )
+  const ossOutput = { system: [] }
+  await plugin['experimental.chat.system.transform']({ sessionID: 'session-oss', model: {} }, ossOutput)
+  const ossInjected = ossOutput.system.at(-1) ?? ''
+  assert.match(ossInjected, /Detected intent: `oss-patterns`/)
+  assert.match(ossInjected, /`grep_app_\*`/)
+
+  await plugin['chat.message'](
+    { sessionID: 'session-local-code' },
+    {
+      message: { parts: [] },
+      parts: [{ type: 'text', text: 'please explain the current implementation in plugins/tool-forced-eval.js' }],
+    },
+  )
+  const codeOutput = { system: [] }
+  await plugin['experimental.chat.system.transform']({ sessionID: 'session-local-code', model: {} }, codeOutput)
+  const codeInjected = codeOutput.system.at(-1) ?? ''
+  assert.match(codeInjected, /Detected intent: `local-code`/)
+  assert.match(codeInjected, /- `glob`:/)
+  assert.doesNotMatch(codeInjected, /`evomemory_\*`/)
 })
 
 test('only adds tool guidance for MCPs that still opt in', async () => {
@@ -126,7 +222,14 @@ test('only adds tool guidance for MCPs that still opt in', async () => {
   await plugin['tool.definition']({ toolID: 'evomemory_search_context' }, evomemoryOutput)
   assert.match(
     evomemoryOutput.description,
-    /project history, prior decisions, stable preferences, governance constraints, feedback, or benchmark results/i,
+    /Prefer this early in non-trivial tasks when prior decisions, stable constraints, earlier fixes, or historical feedback may matter/i,
+  )
+
+  const evomemoryFeedbackOutput = { description: 'Record evomemory feedback', parameters: {} }
+  await plugin['tool.definition']({ toolID: 'evomemory_record_feedback' }, evomemoryFeedbackOutput)
+  assert.match(
+    evomemoryFeedbackOutput.description,
+    /confirms or corrects a durable EvoMemory belief, gene, or capsule so memory stays current/i,
   )
 
   const relayOutput = { description: 'Create relay room', parameters: {} }
@@ -178,7 +281,7 @@ test('reuses recently loaded skills without forcing a reload', async () => {
   )
 
   const injected = output.system.at(-1) ?? ''
-  assert.match(injected, /Currently reusable skills from this session:/)
+  assert.match(injected, /Reusable skills from this session:/)
   assert.match(injected, /- `writing-plans`/)
 })
 
@@ -225,7 +328,7 @@ test('session deletion clears reusable skill state', async () => {
   )
 
   const injected = output.system.at(-1) ?? ''
-  assert.doesNotMatch(injected, /Currently reusable skills from this session:/)
+  assert.doesNotMatch(injected, /Reusable skills from this session:/)
   assert.doesNotMatch(injected, /- `writing-plans`/)
 })
 
@@ -265,11 +368,7 @@ test('directory config overrides global MCP visibility and jsonc comments safely
     }`,
   )
 
-  const plugin = await ToolForcedEvalPlugin({
-    client: { app: { log: async () => {} } },
-    directory,
-    worktree,
-  })
+  const plugin = await createPlugin({ directory, worktree })
 
   await plugin['chat.message'](
     { sessionID: 'session-config-override' },
@@ -286,6 +385,7 @@ test('directory config overrides global MCP visibility and jsonc comments safely
   )
 
   const injected = output.system.at(-1) ?? ''
+  assert.match(injected, /Visible MCP tools from local config:/)
   assert.doesNotMatch(injected, /- `context7`:/)
   assert.match(injected, /- `custom_alpha`: specialized external tool capability\./)
   assert.match(injected, /- `custom_beta`: specialized external tool capability\./)
@@ -309,11 +409,7 @@ test('rebuilds visible MCP list from current config on each substantive turn', a
     }),
   )
 
-  const plugin = await ToolForcedEvalPlugin({
-    client: { app: { log: async () => {} } },
-    directory,
-    worktree,
-  })
+  const plugin = await createPlugin({ directory, worktree })
 
   await plugin['chat.message'](
     { sessionID: 'session-refresh-config' },
@@ -360,6 +456,66 @@ test('rebuilds visible MCP list from current config on each substantive turn', a
   assert.match(secondInjected, /- `refresh_beta`: specialized external tool capability\./)
 })
 
+test('can disable the visible MCP appendix for unclear tasks through config overrides', async () => {
+  const plugin = await createPlugin({
+    configOverrides: {
+      includeVisibleMcpAppendixOnUnclearIntent: false,
+    },
+  })
+
+  await plugin['chat.message'](
+    { sessionID: 'session-no-appendix' },
+    {
+      message: { parts: [] },
+      parts: [{ type: 'text', text: 'which tools are available for this session?' }],
+    },
+  )
+
+  const output = { system: [] }
+  await plugin['experimental.chat.system.transform'](
+    { sessionID: 'session-no-appendix', model: {} },
+    output,
+  )
+
+  const injected = output.system.at(-1) ?? ''
+  assert.doesNotMatch(injected, /Visible MCP tools from local config:/)
+})
+
+test('blocks guarded bash commands and allows safe ones', async () => {
+  const plugin = await createPlugin()
+
+  await assert.rejects(
+    plugin['tool.execute.before'](
+      { tool: 'bash', sessionID: 'session-bash-block' },
+      { args: { command: 'grep foo src', description: 'Search source', workdir: '/tmp' } },
+    ),
+    /Use the dedicated `grep` tool/,
+  )
+
+  await assert.rejects(
+    plugin['tool.execute.before'](
+      { tool: 'bash', sessionID: 'session-bash-block-cat' },
+      { args: { command: 'cat README.md', description: 'Show readme', workdir: '/tmp' } },
+    ),
+    /Use `read` to inspect file contents/,
+  )
+
+  await plugin['tool.execute.before'](
+    { tool: 'bash', sessionID: 'session-bash-ok' },
+    { args: { command: 'npm test', description: 'Run tests', workdir: '/tmp' } },
+  )
+})
+
+test('ships a local tool-forced-eval config template', () => {
+  const configPath = new URL('../tool-forced-eval.config.json', import.meta.url)
+  const content = fs.readFileSync(configPath, 'utf8')
+
+  assert.match(content, /"skillReuseTtl"/)
+  assert.match(content, /"emphasizeEvomemory"/)
+  assert.match(content, /"enableBashGuardrails"/)
+  assert.match(content, /"includeVisibleMcpAppendixOnUnclearIntent"/)
+})
+
 test('expires reusable skills after the ttl window or compaction', async () => {
   const plugin = await createPlugin()
 
@@ -398,7 +554,7 @@ test('expires reusable skills after the ttl window or compaction', async () => {
   )
 
   const ttlInjected = ttlOutput.system.at(-1) ?? ''
-  assert.doesNotMatch(ttlInjected, /Currently reusable skills from this session:/)
+  assert.doesNotMatch(ttlInjected, /Reusable skills from this session:/)
   assert.doesNotMatch(ttlInjected, /systematic-debugging/)
 
   await plugin['chat.message'](
@@ -441,6 +597,6 @@ test('expires reusable skills after the ttl window or compaction', async () => {
   )
 
   const compactedInjected = compactedOutput.system.at(-1) ?? ''
-  assert.doesNotMatch(compactedInjected, /Currently reusable skills from this session:/)
+  assert.doesNotMatch(compactedInjected, /Reusable skills from this session:/)
   assert.doesNotMatch(compactedInjected, /brainstorming/)
 })

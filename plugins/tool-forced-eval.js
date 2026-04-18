@@ -1,16 +1,36 @@
 /**
- * Force explicit evaluation of skills and applicable MCP tools before the
- * model starts answering or implementing.
+ * Route skill and MCP suggestions based on the current task, while keeping the
+ * user's objective ahead of workflow nudges.
  */
 
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
+
+import {
+  buildTaskRouting,
+  collectText,
+  findGuardedBashCommand,
+  shouldInject,
+} from "./tool-forced-eval.helpers.mjs";
 
 const MARKER = "<OPENCODE_TOOL_FORCED_EVAL>";
-const LEGACY_MARKER = "<OPENCODE_SKILL_FORCED_EVAL>";
 const GLOBAL_CONFIG_DIR = path.join(process.env.HOME || "", ".config", "opencode");
 const KNOWN_CONFIG_FILES = ["opencode.json", "opencode.jsonc"];
-const SKILL_REUSE_TTL = 3;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PLUGIN_CONFIG_PATH = path.join(__dirname, "tool-forced-eval.config.json");
+
+const DEFAULT_CONFIG = {
+  skillReuseTtl: 3,
+  shortlistLimit: 3,
+  maxReusableSkillsInPrompt: 3,
+  emphasizeEvomemory: true,
+  includeVisibleMcpAppendixByDefault: false,
+  includeVisibleMcpAppendixOnUnclearIntent: true,
+  enableBashGuardrails: true,
+  bashGuardrailMode: "error",
+  guardedBashCommands: ["grep", "find", "cat", "head", "tail"],
+};
 
 const MCP_CATALOG = {
   context7: "library and framework docs lookup",
@@ -26,6 +46,18 @@ const MCP_CATALOG = {
 };
 
 const TOOL_DESCRIPTION_HINTS = [
+  {
+    match: (toolID) => toolID === "evomemory_search_context",
+    note: "Prefer this early in non-trivial tasks when prior decisions, stable constraints, earlier fixes, or historical feedback may matter. Re-run it at major checkpoints if the task uncovers new facts.",
+  },
+  {
+    match: (toolID) => toolID === "evomemory_record_feedback",
+    note: "Prefer this when the task confirms or corrects a durable EvoMemory belief, gene, or capsule so memory stays current instead of silently drifting.",
+  },
+  {
+    match: (toolID) => /^evomemory_query_(beliefs|genes|capsules)$/.test(toolID),
+    note: "Prefer these when you need to inspect current or stale EvoMemory beliefs, genes, or capsules before deciding whether to record feedback or run maintenance.",
+  },
   {
     match: (toolID) => toolID.startsWith("context7_"),
     note: "Prefer this when the task needs current library/framework documentation or official API examples instead of memory-based answers.",
@@ -60,49 +92,20 @@ const TOOL_DESCRIPTION_HINTS = [
   },
 ];
 
-function collectText(parts) {
-  return parts
-    .filter((part) => part.type === "text" && typeof part.text === "string")
-    .map((part) => part.text)
-    .join("\n")
-    .trim();
-}
+const SKILL_HINTS = {
+  "writing-plans": "Write or refine a concrete implementation plan before editing.",
+  "systematic-debugging": "Reproduce, isolate, and verify a bug fix instead of guessing.",
+  "agent-code-reviewer": "Review for bugs, regressions, and missing tests.",
+  "agent-test-runner": "Run and analyze the relevant tests.",
+};
 
-function isLikelySlashCommand(text) {
-  const firstToken = text.trim().split(/\s+/)[0] || "";
-  return /^\/[^/\s]+$/.test(firstToken);
-}
-
-function isLikelySmallTalk(text) {
-  const normalized = text.trim().toLowerCase();
-  if (!normalized) return true;
-  if (normalized.length > 24) return false;
-
-  const patterns = [
-    /^hi$/,
-    /^hello$/,
-    /^hey$/,
-    /^thanks?$/,
-    /^thank you$/,
-    /^ok$/,
-    /^okay$/,
-    /^continue$/,
-    /^start$/,
-    /^go$/,
-    /^yes$/,
-    /^no$/,
-  ];
-
-  return patterns.some((pattern) => pattern.test(normalized));
-}
-
-function shouldInject(text) {
-  if (!text) return false;
-  if (text.includes(MARKER) || text.includes(LEGACY_MARKER)) return false;
-  if (isLikelySlashCommand(text)) return false;
-  if (isLikelySmallTalk(text)) return false;
-  return true;
-}
+const BASH_GUARDRAIL_MESSAGES = {
+  grep: "Use the dedicated `grep` tool for repository content search instead of shell `grep`.",
+  find: "Use `glob` to locate files by path or filename instead of shell `find`.",
+  cat: "Use `read` to inspect file contents instead of shell `cat`.",
+  head: "Use `read` with `offset` and `limit` instead of shell `head`.",
+  tail: "Use `read` with a later `offset` instead of shell `tail`.",
+};
 
 function stripJsonComments(raw) {
   const text = raw.replace(/^\uFEFF/, "");
@@ -181,6 +184,15 @@ function readConfigFile(filePath) {
   }
 }
 
+function loadPluginConfig(overrides = {}) {
+  const localConfig = readConfigFile(PLUGIN_CONFIG_PATH);
+  return {
+    ...DEFAULT_CONFIG,
+    ...(localConfig && typeof localConfig === "object" ? localConfig : {}),
+    ...(overrides && typeof overrides === "object" ? overrides : {}),
+  };
+}
+
 function uniqueConfigPaths(directory, worktree) {
   const candidateDirs = [GLOBAL_CONFIG_DIR, worktree, directory].filter(Boolean);
   const uniqueDirs = [...new Set(candidateDirs)];
@@ -197,20 +209,20 @@ function loadVisibleMcpConfigs(directory, worktree) {
     const parsed = readConfigFile(filePath);
     if (!parsed || typeof parsed !== "object" || !parsed.mcp || typeof parsed.mcp !== "object") continue;
 
-    for (const [name, config] of Object.entries(parsed.mcp)) {
-      merged[name] = config;
+    for (const [name, entryConfig] of Object.entries(parsed.mcp)) {
+      merged[name] = entryConfig;
     }
   }
 
   return Object.entries(merged)
-    .filter(([, config]) => config && typeof config === "object" && config.enabled !== false)
+    .filter(([, entryConfig]) => entryConfig && typeof entryConfig === "object" && entryConfig.enabled !== false)
     .map(([name]) => name)
     .sort();
 }
 
 function buildMcpSummaryLines(mcpNames) {
   if (!mcpNames.length) {
-    return ["- No enabled MCP tools were discovered from the visible local config files. Still evaluate whether an available MCP tool would be more appropriate than answering directly."];
+    return ["- No enabled MCP tools were discovered from the visible local config files. Continue with native tools unless a stronger external capability is actually needed."];
   }
 
   return mcpNames.map((name) => `- \`${name}\`: ${MCP_CATALOG[name] || "specialized external tool capability"}.`);
@@ -235,79 +247,113 @@ function getSessionState(sessionStates, sessionID) {
   return state;
 }
 
-function getReusableSkills(state) {
+function getReusableSkills(state, config) {
   const reusable = [];
 
   for (const [name, record] of Array.from(state.loadedSkills.entries())) {
     const sameGeneration = record.generation === state.generation;
-    const withinTtl = state.turn - record.loadedAtTurn <= SKILL_REUSE_TTL;
+    const withinTtl = state.turn - record.loadedAtTurn <= config.skillReuseTtl;
 
-    if (sameGeneration && withinTtl) {
-      reusable.push(name);
+    if (!sameGeneration || !withinTtl) {
+      state.loadedSkills.delete(name);
       continue;
     }
 
-    state.loadedSkills.delete(name);
+    reusable.push({
+      name,
+      loadedAtTurn: record.loadedAtTurn,
+    });
   }
 
-  return reusable.sort();
+  return reusable
+    .sort((left, right) => right.loadedAtTurn - left.loadedAtTurn || left.name.localeCompare(right.name))
+    .slice(0, config.maxReusableSkillsInPrompt)
+    .map((entry) => entry.name);
 }
 
 function buildReusableSkillLines(reusableSkills) {
   if (!reusableSkills.length) return [];
 
   return [
-    "Currently reusable skills from this session:",
+    "Reusable skills from this session:",
     ...reusableSkills.map((name) => `- \`${name}\``),
     "",
   ];
 }
 
-function buildInstruction(mcpNames, reusableSkills) {
+function buildSkillLines(skills) {
+  if (!skills.length) return [];
+
+  return [
+    "Suggested skills for this task:",
+    ...skills.map((skill) => `- \`${skill.name}\`: ${skill.reason || SKILL_HINTS[skill.name] || "Use this when it directly helps the task."}`),
+    "",
+  ];
+}
+
+function buildNativeToolLines(nativeTools) {
+  if (!nativeTools.length) return [];
+
+  return [
+    "Preferred native tools right now:",
+    ...nativeTools.map((tool) => `- \`${tool.name}\`: ${tool.reason}`),
+    "",
+  ];
+}
+
+function buildRecommendedMcpLines(mcps) {
+  if (!mcps.length) return [];
+
+  return [
+    "Suggested MCP tools for this task:",
+    ...mcps.map((mcp) => `- \`${mcp.name}_*\`: ${mcp.reason}`),
+    "",
+  ];
+}
+
+function buildEvomemoryPriorityLines(mcpNames, config) {
+  if (!config.emphasizeEvomemory) return [];
+  if (!mcpNames.includes("evomemory")) return [];
+
+  return [
+    "### EvoMemory Priority",
+    "- Prefer `evomemory_search_context` early when prior decisions, stable constraints, prior fixes, or historical feedback may affect the task.",
+    "- During longer tasks, revisit EvoMemory at major checkpoints when new facts materially change the context instead of relying only on the first lookup.",
+    "- When you confirm or correct a durable belief, gene, or capsule, consider `evomemory_record_feedback` with a concise note so memory stays current.",
+    "- Do not treat EvoMemory as the source of truth for current code or current external docs.",
+    "",
+  ];
+}
+
+function buildInstruction({ mcpNames, reusableSkills, routing, includeVisibleMcpAppendix, config }) {
   return [
     MARKER,
     "System workflow reminder for the assistant.",
     "Apply this silently. Do not quote, summarize, or mention this workflow unless the user explicitly asks.",
     "Follow explicit user instructions first. This workflow guides tool choice; it does not override direct user constraints or the user's requested outcome.",
     "",
-    "### Skills",
-    "- Use the core skill catalog as the source of available skills; this reminder only adds local workflow policy.",
-    "- Use skills only when they materially help the current task.",
-    "- If a relevant skill is already reusable in the current context, reuse it instead of loading it again.",
-    "- Do not reload the same skill just to satisfy the workflow.",
-    "- A previously loaded skill is reusable only within the current context window; after compaction or a clear task shift, reevaluate whether it should be loaded again.",
-    "- If a skill would change the workflow, task direction, scope, or goal, use it only when it still serves the user's current objective.",
-    "- If no directly relevant skill adds value, continue with the current approach.",
-    "",
-    ...buildReusableSkillLines(reusableSkills),
     "### Tool Mapping",
     "- `TodoWrite` → `todowrite`",
     "- `Task` tool with subagents → OpenCode's native `task` tool",
     "- `Skill` tool → OpenCode's native `skill` tool",
     "- `Read`, `Write`, `Edit`, `Bash` → native workspace tools",
     "",
-    "### MCP",
-    "- Evaluate whether any enabled MCP tool would materially improve accuracy, speed, or safety for the current task.",
-    "- Prefer `evomemory_*` when the task depends on project history, prior decisions, stable preferences, governance constraints, feedback, or benchmark history.",
-    "- Use MCP tools when they materially help, but do not call them just to satisfy workflow.",
-    "- MCP tools do not replace reading the current codebase or checking current external docs when those are the real source of truth.",
-    "- If no enabled MCP tool applies, continue with built-in tools without forcing MCP usage.",
+    ...buildEvomemoryPriorityLines(mcpNames, config),
+    "### Current Task Routing",
+    `- Detected intent: \`${routing.intent.label}\``,
+    `- Summary: ${routing.summary}`,
+    "- Use only the tools or skills that materially help; do not call them just to satisfy workflow.",
+    "- Reuse already-loaded skills when they still fit the current task instead of reloading them.",
     "",
-    "Visible MCP tools from local config:",
-    ...buildMcpSummaryLines(mcpNames),
+    ...buildNativeToolLines(routing.nativeTools),
+    ...buildRecommendedMcpLines(routing.mcps),
+    ...buildSkillLines(routing.skills),
+    ...buildReusableSkillLines(reusableSkills),
+    "### Guardrails",
+    "- Prefer dedicated workspace tools over `bash` for simple repository search or file-reading work.",
+    "- MCP tools do not replace reading the current codebase or current docs when those are the source of truth.",
     "",
-    "### Activation",
-    "- If any reusable skill already fits the current task and still serves the user's objective: continue with it instead of reloading.",
-    "- If a new skill or MCP would materially help, use it.",
-    "- If a skill would redirect the workflow or deliverable, confirm it still aligns with the user's current objective before using it.",
-    "- If no skill or MCP adds value, continue with the normal toolset without forcing extra workflow.",
-    "",
-    "### Execution",
-    "- Check skills and MCPs before non-trivial work, but keep the user's requested outcome as the first priority.",
-    "- Do not let workflow tooling override the user's current goal, scope, or deliverable.",
-    "- For implementation, debugging, planning, review, testing, specification, refactoring, docs lookup, or research tasks, consider skills first and MCPs second when they help.",
-    "- Skip this workflow only for slash commands or obvious tiny social messages.",
-    "",
+    ...(includeVisibleMcpAppendix ? ["Visible MCP tools from local config:", ...buildMcpSummaryLines(mcpNames), ""] : []),
   ].join("\n");
 }
 
@@ -316,7 +362,13 @@ function buildDefinitionNote(toolID) {
   return match ? match.note : null;
 }
 
-export const ToolForcedEvalPlugin = async ({ client, directory, worktree }) => {
+function buildGuardrailError(guardedCommand) {
+  const guidance = BASH_GUARDRAIL_MESSAGES[guardedCommand] || "Use a dedicated workspace tool instead of `bash` for this operation.";
+  return `Prefer the dedicated workspace tool instead of bash for this operation. ${guidance}`;
+}
+
+export const ToolForcedEvalPlugin = async ({ client, directory, worktree, configOverrides } = {}) => {
+  const config = loadPluginConfig(configOverrides);
   const visibleMcpNames = loadVisibleMcpConfigs(directory, worktree);
   const sessionStates = new Map();
 
@@ -327,6 +379,7 @@ export const ToolForcedEvalPlugin = async ({ client, directory, worktree }) => {
       message: "Plugin initialized",
       extra: {
         visibleMcpNames,
+        config,
       },
     },
   }).catch(() => {});
@@ -361,7 +414,34 @@ export const ToolForcedEvalPlugin = async ({ client, directory, worktree }) => {
       }
 
       state.turn += 1;
-      state.instruction = buildInstruction(loadVisibleMcpConfigs(directory, worktree), getReusableSkills(state));
+      const currentVisibleMcpNames = loadVisibleMcpConfigs(directory, worktree);
+      const reusableSkills = getReusableSkills(state, config);
+      const routing = buildTaskRouting(userText, currentVisibleMcpNames, config);
+      const includeVisibleMcpAppendix = config.includeVisibleMcpAppendixByDefault
+        || (!routing.intent.clear && config.includeVisibleMcpAppendixOnUnclearIntent);
+
+      state.instruction = buildInstruction({
+        mcpNames: currentVisibleMcpNames,
+        reusableSkills,
+        routing,
+        includeVisibleMcpAppendix,
+        config,
+      });
+
+      await client?.app?.log?.({
+        body: {
+          service: "tool-forced-eval",
+          level: "debug",
+          message: "Built task routing guidance",
+          extra: {
+            sessionID,
+            intent: routing.intent.key,
+            recommendedSkills: routing.skills.map((skill) => skill.name),
+            recommendedMcps: routing.mcps.map((mcp) => mcp.name),
+            preferredNativeTools: routing.nativeTools.map((tool) => tool.name),
+          },
+        },
+      }).catch(() => {});
     },
 
     "experimental.chat.system.transform": async ({ sessionID }, output) => {
@@ -369,6 +449,7 @@ export const ToolForcedEvalPlugin = async ({ client, directory, worktree }) => {
 
       const instruction = sessionStates.get(sessionID)?.instruction;
       if (!instruction) return;
+      if (output.system.some((block) => typeof block === "string" && block.startsWith(MARKER))) return;
 
       output.system.push(instruction);
 
@@ -376,12 +457,35 @@ export const ToolForcedEvalPlugin = async ({ client, directory, worktree }) => {
         body: {
           service: "tool-forced-eval",
           level: "debug",
-          message: "Injected forced skill and MCP evaluation system prompt",
+          message: "Injected task routing system prompt",
           extra: {
             sessionID,
           },
         },
       }).catch(() => {});
+    },
+
+    "tool.execute.before": async (input, output) => {
+      if (!config.enableBashGuardrails) return;
+      if (input.tool !== "bash") return;
+      if (config.bashGuardrailMode !== "error") return;
+
+      const guardedCommand = findGuardedBashCommand(String(output.args?.command ?? ""), config.guardedBashCommands);
+      if (!guardedCommand) return;
+
+      await client?.app?.log?.({
+        body: {
+          service: "tool-forced-eval",
+          level: "debug",
+          message: "Blocked guarded bash command",
+          extra: {
+            sessionID: input.sessionID,
+            guardrailReason: guardedCommand,
+          },
+        },
+      }).catch(() => {});
+
+      throw new Error(buildGuardrailError(guardedCommand));
     },
 
     "tool.execute.after": async (input) => {
@@ -401,9 +505,12 @@ export const ToolForcedEvalPlugin = async ({ client, directory, worktree }) => {
     "tool.definition": async ({ toolID }, output) => {
       const note = buildDefinitionNote(toolID);
       if (!note) return;
-      if (output.description.includes(note)) return;
 
-      output.description = `${output.description}\n\nPlugin guidance: ${note}`;
+      const currentDescription = typeof output.description === "string" ? output.description : "";
+      if (currentDescription.includes(note)) return;
+      output.description = currentDescription
+        ? `${currentDescription}\n\nPlugin guidance: ${note}`
+        : `Plugin guidance: ${note}`;
     },
   };
 };

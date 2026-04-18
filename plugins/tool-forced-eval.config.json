@@ -1,0 +1,17 @@
+{
+  "skillReuseTtl": 3,
+  "shortlistLimit": 3,
+  "maxReusableSkillsInPrompt": 3,
+  "emphasizeEvomemory": true,
+  "includeVisibleMcpAppendixByDefault": false,
+  "includeVisibleMcpAppendixOnUnclearIntent": true,
+  "enableBashGuardrails": true,
+  "bashGuardrailMode": "error",
+  "guardedBashCommands": [
+    "grep",
+    "find",
+    "cat",
+    "head",
+    "tail"
+  ]
+}

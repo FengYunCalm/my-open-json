@@ -4,13 +4,22 @@ import assert from 'node:assert/strict'
 import {
   buildDirectBridgeLaunch,
   buildSystemBlock,
+  shouldPersist,
   shouldSearch,
 } from '../evomemory-opencode.helpers.mjs'
 
 test('shouldSearch ignores tiny small-talk and slash commands', () => {
   assert.equal(shouldSearch('ok', { minSearchChars: 16 }), false)
+  assert.equal(shouldSearch('好的', { minSearchChars: 16 }), false)
   assert.equal(shouldSearch('/evomemory:status', { minSearchChars: 16 }), false)
   assert.equal(shouldSearch('drawer navigation is missing from search results', { minSearchChars: 16 }), true)
+})
+
+test('shouldPersist is more eager than search but still ignores tiny chatter', () => {
+  assert.equal(shouldPersist('好的', { minPersistChars: 8 }), false)
+  assert.equal(shouldPersist('/evomemory:status', { minPersistChars: 8 }), false)
+  assert.equal(shouldPersist('fix the stale belief after this task', { minPersistChars: 8 }), true)
+  assert.equal(shouldPersist('修正这个过期记忆', { minPersistChars: 8 }), true)
 })
 
 test('shouldSearch prefers history-seeking prompts over current-code inspection prompts', () => {

@@ -1,7 +1,9 @@
 {
   "bridgeBaseUrl": "http://127.0.0.1:8765",
   "minSearchChars": 16,
+  "minPersistChars": 8,
   "maxInjectedChars": 1800,
+  "autoFlushOnMessage": true,
   "autoFlushOnIdle": true,
   "autoFlushOnCompact": true,
   "ensureBridgeCommand": [

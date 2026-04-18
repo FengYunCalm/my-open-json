@@ -6,6 +6,7 @@ import {
   buildSystemBlock,
   collectText,
   messagesSinceCheckpoint,
+  shouldPersist,
   shouldSearch,
 } from './evomemory-opencode.helpers.mjs'
 import { ensureBridge } from './evomemory-bridge-manager.mjs'
@@ -15,7 +16,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULTS = {
   bridgeBaseUrl: 'http://127.0.0.1:8765',
   minSearchChars: 16,
+  minPersistChars: 8,
   maxInjectedChars: 1800,
+  autoFlushOnMessage: true,
   autoFlushOnIdle: true,
   autoFlushOnCompact: true,
   healthcheckCacheTtlMs: 1000,
@@ -136,6 +139,11 @@ export const EvomemoryOpencodePlugin = async ({ client, directory, worktree }) =
         ...current,
         systemBlock: '',
       })
+      if (config.autoFlushOnMessage && shouldPersist(text, config)) {
+        await flushSession(sessionID, 'message').catch((error) =>
+          log(client, 'warn', 'Message flush failed', { sessionID, error: String(error) }),
+        )
+      }
       if (!shouldSearch(text, config)) return
       if (!(await ensureBridge(config, client))) return
       const search = await fetchJson(config.bridgeBaseUrl, '/internal/context/search', {
@@ -146,8 +154,9 @@ export const EvomemoryOpencodePlugin = async ({ client, directory, worktree }) =
         return null
       })
       if (!search) return
+      const latest = sessions.get(sessionID) ?? { directory: getDirectory(sessionID) }
       sessions.set(sessionID, {
-        ...current,
+        ...latest,
         systemBlock: search.system_block || buildSystemBlock(search, config.maxInjectedChars),
       })
     },

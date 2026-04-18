@@ -33,8 +33,10 @@ test('prewarms evomemory bridge during plugin initialization', async () => {
 
 test('prefers bridge-provided system_block over local formatting', async () => {
   const originalFetch = globalThis.fetch
+  const calls = []
 
   globalThis.fetch = async (url) => {
+    calls.push(String(url))
     if (String(url).endsWith('/health')) {
       return {
         ok: true,
@@ -63,6 +65,13 @@ test('prefers bridge-provided system_block over local formatting', async () => {
       }
     }
 
+    if (String(url).endsWith('/internal/session/flush')) {
+      return {
+        ok: true,
+        json: async () => ({ last_saved_message_id: 'msg_002' }),
+      }
+    }
+
     throw new Error(`unexpected url: ${url}`)
   }
 
@@ -70,7 +79,14 @@ test('prefers bridge-provided system_block over local formatting', async () => {
     const plugin = await EvomemoryOpencodePlugin({
       client: {
         app: { log: async () => {} },
-        session: { messages: async () => ({ data: [] }) },
+        session: {
+          messages: async () => ({
+            data: [
+              { info: { id: 'msg_001' } },
+              { info: { id: 'msg_002' } },
+            ],
+          }),
+        },
       },
       directory: '/home/mechrevo/.config/opencode',
       worktree: '/home/mechrevo/.config/opencode',
@@ -85,6 +101,7 @@ test('prefers bridge-provided system_block over local formatting', async () => {
     await plugin['experimental.chat.system.transform']({ sessionID: 'ses_demo' }, output)
 
     assert.deepEqual(output.system, ['bridge supplied block'])
+    assert.ok(calls.findIndex((url) => url.endsWith('/internal/session/flush')) < calls.findIndex((url) => url.endsWith('/internal/context/search')))
   } finally {
     globalThis.fetch = originalFetch
   }
@@ -107,6 +124,13 @@ test('does not query evomemory for long current-code inspection prompts', async 
       throw new Error('should not search evomemory for current-code inspection prompts')
     }
 
+    if (String(url).endsWith('/internal/session/flush')) {
+      return {
+        ok: true,
+        json: async () => ({ last_saved_message_id: 'msg_code_001' }),
+      }
+    }
+
     throw new Error(`unexpected url: ${url}`)
   }
 
@@ -114,7 +138,11 @@ test('does not query evomemory for long current-code inspection prompts', async 
     const plugin = await EvomemoryOpencodePlugin({
       client: {
         app: { log: async () => {} },
-        session: { messages: async () => ({ data: [] }) },
+        session: {
+          messages: async () => ({
+            data: [{ info: { id: 'msg_code_001' } }],
+          }),
+        },
       },
       directory: '/home/mechrevo/.config/opencode',
       worktree: '/home/mechrevo/.config/opencode',
@@ -131,6 +159,51 @@ test('does not query evomemory for long current-code inspection prompts', async 
     await plugin['experimental.chat.system.transform']({ sessionID: 'ses_code_truth' }, output)
 
     assert.deepEqual(output.system, [])
+    assert.equal(calls.filter((url) => url.endsWith('/internal/context/search')).length, 0)
+    assert.equal(calls.filter((url) => url.endsWith('/internal/session/flush')).length, 1)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('does not flush evomemory on tiny chinese chatter', async () => {
+  const originalFetch = globalThis.fetch
+  const calls = []
+
+  globalThis.fetch = async (url) => {
+    calls.push(String(url))
+    if (String(url).endsWith('/health')) {
+      return {
+        ok: true,
+        json: async () => ({ ok: true }),
+      }
+    }
+
+    if (String(url).endsWith('/internal/session/flush') || String(url).endsWith('/internal/context/search')) {
+      throw new Error('should not flush or search for tiny chatter')
+    }
+
+    throw new Error(`unexpected url: ${url}`)
+  }
+
+  try {
+    const plugin = await EvomemoryOpencodePlugin({
+      client: {
+        app: { log: async () => {} },
+        session: { messages: async () => ({ data: [{ info: { id: 'msg_chatter_001' } }] }) },
+      },
+      directory: '/home/mechrevo/.config/opencode',
+      worktree: '/home/mechrevo/.config/opencode',
+    })
+
+    await plugin['chat.message'](
+      { sessionID: 'ses_tiny_zh' },
+      {
+        parts: [{ type: 'text', text: '好的' }],
+      },
+    )
+
+    assert.equal(calls.filter((url) => url.endsWith('/internal/session/flush')).length, 0)
     assert.equal(calls.filter((url) => url.endsWith('/internal/context/search')).length, 0)
   } finally {
     globalThis.fetch = originalFetch
