@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
+import os
 from typing import Any
 
 import uvicorn
@@ -9,6 +11,34 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from evomemory.context.bridge import BridgeConfig, BridgeCore
+
+
+def _is_loopback_host(host: str | None) -> bool:
+    if host in {None, "localhost", "testclient"}:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _reject_non_local_request(request: Request) -> JSONResponse | None:
+    client_host = request.client.host if request.client else None
+    if _is_loopback_host(client_host):
+        return None
+    return JSONResponse(
+        {"error": "internal routes require a loopback client"}, status_code=403
+    )
+
+
+def _validate_bind_host(host: str) -> None:
+    if _is_loopback_host(host):
+        return
+    if os.getenv("EVOMEMORY_ALLOW_REMOTE") == "1":
+        return
+    raise SystemExit(
+        "Refusing to bind evomemory bridge to a non-loopback host without EVOMEMORY_ALLOW_REMOTE=1"
+    )
 
 
 def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
@@ -283,19 +313,28 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
     @server.custom_route(
         "/internal/debug/status", methods=["GET"], include_in_schema=False
     )
-    async def debug_status_route(_request: Request):
+    async def debug_status_route(request: Request):
+        rejection = _reject_non_local_request(request)
+        if rejection is not None:
+            return rejection
         return JSONResponse(core.debug_status())
 
     @server.custom_route(
         "/internal/debug/maintenance", methods=["GET"], include_in_schema=False
     )
-    async def debug_maintenance_route(_request: Request):
+    async def debug_maintenance_route(request: Request):
+        rejection = _reject_non_local_request(request)
+        if rejection is not None:
+            return rejection
         return JSONResponse(core.maintenance_summary())
 
     @server.custom_route(
         "/internal/session/start", methods=["POST"], include_in_schema=False
     )
     async def session_start_route(request: Request):
+        rejection = _reject_non_local_request(request)
+        if rejection is not None:
+            return rejection
         payload = await request.json()
         return JSONResponse(
             core.start_session(payload["session_id"], payload["directory"])
@@ -305,6 +344,9 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
         "/internal/context/search", methods=["POST"], include_in_schema=False
     )
     async def context_search_route(request: Request):
+        rejection = _reject_non_local_request(request)
+        if rejection is not None:
+            return rejection
         payload = await request.json()
         return JSONResponse(
             core.search_context(
@@ -319,6 +361,9 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
         "/internal/session/flush", methods=["POST"], include_in_schema=False
     )
     async def session_flush_route(request: Request):
+        rejection = _reject_non_local_request(request)
+        if rejection is not None:
+            return rejection
         payload = await request.json()
         return JSONResponse(
             core.flush_session(
@@ -333,6 +378,9 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
         "/internal/session/compact", methods=["POST"], include_in_schema=False
     )
     async def session_compact_route(request: Request):
+        rejection = _reject_non_local_request(request)
+        if rejection is not None:
+            return rejection
         payload = await request.json()
         return JSONResponse(
             core.compact_session(
@@ -344,6 +392,9 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
         "/internal/maintenance/run", methods=["POST"], include_in_schema=False
     )
     async def maintenance_run_route(request: Request):
+        rejection = _reject_non_local_request(request)
+        if rejection is not None:
+            return rejection
         payload = await request.json()
         return JSONResponse(
             core.evomemory_run_maintenance(
@@ -376,6 +427,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.transport == "streamable-http":
+        _validate_bind_host(args.host)
     config = (
         BridgeConfig(palace_path=args.palace_path)
         if args.palace_path
@@ -392,4 +445,11 @@ if __name__ == "__main__":
     main()
 
 
-__all__ = ["create_app", "create_mcp_server", "main", "parse_args"]
+__all__ = [
+    "create_app",
+    "create_mcp_server",
+    "main",
+    "parse_args",
+    "_is_loopback_host",
+    "_validate_bind_host",
+]

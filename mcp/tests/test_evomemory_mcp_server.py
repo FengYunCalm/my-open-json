@@ -9,7 +9,7 @@ from starlette.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from evomemory.interfaces.mcp.server import create_app
+from evomemory.interfaces.mcp.server import _validate_bind_host, create_app
 
 
 class FakeCore:
@@ -568,6 +568,33 @@ def test_internal_maintenance_run_route_forwards_parameters():
     assert core.calls[0][1]["profile"] == "full"
     assert core.calls[0][1]["min_confidence"] == 0.75
     assert core.calls[0][1]["limit"] == 10
+
+
+def test_internal_routes_reject_non_local_clients():
+    core = FakeCore()
+    client = TestClient(create_app(core), client=("198.51.100.7", 43123))
+
+    response = client.post(
+        "/internal/context/search",
+        json={
+            "query": "git commit",
+            "directory": "/home/mechrevo/.config/opencode",
+        },
+    )
+
+    assert response.status_code == 403
+    assert core.calls == []
+
+
+def test_validate_bind_host_rejects_non_loopback_without_override(monkeypatch):
+    monkeypatch.delenv("EVOMEMORY_ALLOW_REMOTE", raising=False)
+
+    try:
+        _validate_bind_host("0.0.0.0")
+    except SystemExit as exc:
+        assert "EVOMEMORY_ALLOW_REMOTE=1" in str(exc)
+    else:
+        raise AssertionError("expected non-loopback host validation to fail")
 
 
 def test_mcp_endpoint_accepts_stale_session_header_in_stateless_mode():

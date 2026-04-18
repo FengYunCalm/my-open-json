@@ -106,10 +106,12 @@ export const EvomemoryOpencodePlugin = async ({ client, directory, worktree, con
     const sessionState = sessions.get(sessionID) ?? { directory: getDirectory(sessionID) }
     const messages = await getMessages(client, sessionID)
     const latestMessageID = messages.at(-1)?.info?.id
-    const messageSignature = messages.map((message) => message?.info?.id ?? '').join(':')
-    if (messageSignature && messageSignature === sessionState.lastSavedSignature) return null
     if (latestMessageID && latestMessageID === sessionState.lastSavedMessageID) return null
-    const pending = messagesSinceCheckpoint(messages, sessionState.lastSavedMessageID)
+    const pending = messagesSinceCheckpoint(
+      messages,
+      sessionState.lastSavedMessageID,
+      sessionState.lastSavedMessageIndex,
+    )
     if (!pending.length) return null
     const payload = await fetchJson(config.bridgeBaseUrl, '/internal/session/flush', {
       method: 'POST',
@@ -123,7 +125,7 @@ export const EvomemoryOpencodePlugin = async ({ client, directory, worktree, con
     sessions.set(sessionID, {
       ...sessionState,
       lastSavedMessageID: payload.last_saved_message_id ?? sessionState.lastSavedMessageID,
-      lastSavedSignature: messageSignature,
+      lastSavedMessageIndex: messages.length ? messages.length - 1 : sessionState.lastSavedMessageIndex,
     })
     return payload
   }
@@ -208,7 +210,7 @@ export const EvomemoryOpencodePlugin = async ({ client, directory, worktree, con
       const latest = sessions.get(sessionID) ?? { directory: getDirectory(sessionID) }
       sessions.set(sessionID, {
         ...latest,
-        systemBlock: search.system_block || buildSystemBlock(search, config.maxInjectedChars),
+        systemBlock: buildSystemBlock(search, config.maxInjectedChars),
       })
     },
 

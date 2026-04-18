@@ -48,10 +48,15 @@ const DOCS_HINTS = [
 const MEMORY_MAINTENANCE_HINTS = [
   /\bevomemory_record_feedback\b/i,
   /\bevomemory_query_(beliefs|genes|capsules)\b/i,
-  /\b(record|update|correct|fix|repair|delete|remove|reconcile|maintain)\s+(the\s+)?(memory|belief|beliefs|gene|genes|capsule|capsules|feedback)\b/i,
-  /\b(stale|incorrect)\s+(memory|belief|gene|capsule|capsules)\b/i,
-  /(记录|更新|修正|纠正|修补|删除|清理|维护).*(记忆|belief|gene|capsule|反馈)/,
-  /(过期|错误).*(记忆|belief|gene|capsule)/,
+  /\b(record|update|correct|fix|repair|delete|remove|reconcile|maintain)\s+(the\s+)?(durable memory|project memory|evomemory memory|belief|beliefs|gene|genes|capsule|capsules|feedback)\b/i,
+  /\b(stale|incorrect)\s+(durable memory|project memory|belief|beliefs|gene|capsule|capsules)\b/i,
+  /(记录|更新|修正|纠正|修补|删除|清理|维护).*(长期记忆|项目记忆|EvoMemory|belief|gene|capsule|反馈)/,
+  /(过期|错误).*(长期记忆|项目记忆|EvoMemory|belief|gene|capsule)/,
+]
+
+const MEMORY_MAINTENANCE_EXCLUDES = [
+  /\b(memory leak|memory usage|memory cache|cache invalidation|heap|gc|garbage collection)\b/i,
+  /(内存泄漏|内存占用|内存缓存|缓存失效|缓存|堆内存|垃圾回收)/,
 ]
 
 const OSS_HINTS = [
@@ -149,7 +154,7 @@ export function classifyIntent(text = '') {
     return { key: 'unclear', label: INTENT_LABELS['unclear'], clear: false }
   }
 
-  if (matchesAny(MEMORY_MAINTENANCE_HINTS, text)) {
+  if (matchesAny(MEMORY_MAINTENANCE_HINTS, text) && !matchesAny(MEMORY_MAINTENANCE_EXCLUDES, text)) {
     return { key: 'memory-maintenance', label: INTENT_LABELS['memory-maintenance'], clear: true }
   }
 
@@ -270,9 +275,23 @@ export function buildTaskRouting(text = '', visibleMcpNames = [], config = {}) {
 
 export function findGuardedBashCommand(command = '', guardedCommands = ['grep', 'find', 'cat', 'head', 'tail']) {
   if (!command.trim()) return null
+
+  const wrappedShell = command.match(
+    /^(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*(?:bash|sh|zsh|fish)\s+-[lc]+\s+(?<inner>[\s\S]+)$/i,
+  )
+  if (wrappedShell?.groups?.inner) {
+    const inner = wrappedShell.groups.inner.trim()
+    const unquoted =
+      ((inner.startsWith('"') && inner.endsWith('"')) || (inner.startsWith("'") && inner.endsWith("'")))
+        ? inner.slice(1, -1)
+        : inner
+    const nested = findGuardedBashCommand(unquoted, guardedCommands)
+    if (nested) return nested
+  }
+
   const escaped = guardedCommands.map((item) => item.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')
   const pattern = new RegExp(
-    `(?:^|(?:&&|\\|\\||;)\\s*)(?:[A-Za-z_][A-Za-z0-9_]*=\\S+\\s+|env\\s+)*(?<command>${escaped})\\b`,
+    `(?:^|(?:&&|\\|\\||\\||;)\\s*)(?:[A-Za-z_][A-Za-z0-9_]*=\\S+\\s+|env\\s+)*(?<command>${escaped})\\b`,
     'i',
   )
   return pattern.exec(command)?.groups?.command?.toLowerCase() ?? null

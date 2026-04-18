@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import {
   buildDirectBridgeLaunch,
   buildSystemBlock,
+  messagesSinceCheckpoint,
   shouldPersist,
   shouldSearch,
 } from '../evomemory-opencode.helpers.mjs'
@@ -72,7 +73,7 @@ test('buildSystemBlock includes source metadata while staying compact', () => {
         },
       ],
     },
-    240,
+    360,
   )
 
   assert.match(block, /Optional historical context from EvoMemory for wing 'opencode'/)
@@ -81,7 +82,21 @@ test('buildSystemBlock includes source metadata while staying compact', () => {
   assert.match(block, /room=opencode-session/)
   assert.match(block, /role=assistant/)
   assert.match(block, /src=session:ses_demo/)
-  assert.ok(block.length <= 240)
+  assert.doesNotMatch(block, /Search results need drawer ids to become navigable/)
+  assert.ok(block.length <= 360)
+})
+
+test('messagesSinceCheckpoint reuses a cached checkpoint index when still valid', () => {
+  const messages = [
+    { info: { id: 'msg_dup' } },
+    { info: { id: 'msg_002' } },
+    { info: { id: 'msg_dup' } },
+    { info: { id: 'msg_003' } },
+  ]
+
+  const pending = messagesSinceCheckpoint(messages, 'msg_dup', 2)
+
+  assert.deepEqual(pending.map((message) => message.info.id), ['msg_003'])
 })
 
 test('buildDirectBridgeLaunch derives a direct fallback bridge command', () => {

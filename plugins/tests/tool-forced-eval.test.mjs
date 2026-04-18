@@ -37,9 +37,6 @@ test('injects routed tool-forced-eval guidance through system transform', async 
   assert.match(injected, /System workflow reminder for the assistant\./)
   assert.match(injected, /Follow explicit user instructions first\./)
   assert.match(injected, /### Tool Mapping/)
-  assert.match(injected, /### EvoMemory Priority/)
-  assert.match(injected, /Prefer `evomemory_search_context` early when prior decisions, stable constraints, prior fixes, or historical feedback may affect the task\./)
-  assert.match(injected, /consider `evomemory_record_feedback` with a concise note so memory stays current\./)
   assert.match(injected, /### Current Task Routing/)
   assert.match(injected, /Detected intent: `local-code`/)
   assert.match(injected, /Inspect the local codebase with native workspace tools before reaching for MCPs\./)
@@ -49,6 +46,7 @@ test('injects routed tool-forced-eval guidance through system transform', async 
   assert.match(injected, /- `read`: Open only the relevant files and sections\./)
   assert.match(injected, /### Guardrails/)
   assert.match(injected, /Prefer dedicated workspace tools over `bash` for simple repository search or file-reading work\./)
+  assert.doesNotMatch(injected, /### EvoMemory Priority/)
   assert.doesNotMatch(injected, /Visible MCP tools from local config:/)
   assert.doesNotMatch(injected, /must call the skill tool/i)
   assert.doesNotMatch(injected, /call the MCP tool immediately/i)
@@ -151,6 +149,7 @@ test('routes history, docs, and GitHub pattern tasks to the right MCP shortlists
   const maintenanceOutput = { system: [] }
   await plugin['experimental.chat.system.transform']({ sessionID: 'session-memory-maintenance', model: {} }, maintenanceOutput)
   const maintenanceInjected = maintenanceOutput.system.at(-1) ?? ''
+  assert.match(maintenanceInjected, /### EvoMemory Priority/)
   assert.match(maintenanceInjected, /Detected intent: `memory-maintenance`/)
   assert.match(maintenanceInjected, /Use EvoMemory to inspect existing context and keep durable memory current as the task confirms, corrects, or reconciles prior state\./)
   assert.match(maintenanceInjected, /`evomemory_\*`/)
@@ -165,6 +164,7 @@ test('routes history, docs, and GitHub pattern tasks to the right MCP shortlists
   const historyOutput = { system: [] }
   await plugin['experimental.chat.system.transform']({ sessionID: 'session-history', model: {} }, historyOutput)
   const historyInjected = historyOutput.system.at(-1) ?? ''
+  assert.match(historyInjected, /### EvoMemory Priority/)
   assert.match(historyInjected, /Detected intent: `history`/)
   assert.match(historyInjected, /Suggested MCP tools for this task:/)
   assert.match(historyInjected, /`evomemory_\*`/)
@@ -498,6 +498,22 @@ test('blocks guarded bash commands and allows safe ones', async () => {
       { args: { command: 'cat README.md', description: 'Show readme', workdir: '/tmp' } },
     ),
     /Use `read` to inspect file contents/,
+  )
+
+  await assert.rejects(
+    plugin['tool.execute.before'](
+      { tool: 'bash', sessionID: 'session-bash-block-pipe' },
+      { args: { command: 'ls src | grep foo', description: 'Pipe search', workdir: '/tmp' } },
+    ),
+    /Use the dedicated `grep` tool/,
+  )
+
+  await assert.rejects(
+    plugin['tool.execute.before'](
+      { tool: 'bash', sessionID: 'session-bash-block-shell-wrap' },
+      { args: { command: 'bash -lc "grep foo src"', description: 'Wrapped search', workdir: '/tmp' } },
+    ),
+    /Use the dedicated `grep` tool/,
   )
 
   await plugin['tool.execute.before'](

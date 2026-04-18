@@ -21,6 +21,8 @@ test('filters english and chinese tiny small-talk without blocking substantive c
 
 test('classifies the major task intents', () => {
   assert.equal(classifyIntent('use evomemory_record_feedback to correct stale beliefs').key, 'memory-maintenance')
+  assert.equal(classifyIntent('fix memory leak in tool-forced-eval').key, 'unclear')
+  assert.equal(classifyIntent('delete memory cache before retry').key, 'unclear')
   assert.equal(classifyIntent('请解释一下 plugins/tool-forced-eval.js 这个文件的当前实现').key, 'local-code')
   assert.equal(classifyIntent('look up the React useEffectEvent docs').key, 'docs')
   assert.equal(classifyIntent('go search similar OpenCode plugins on GitHub').key, 'oss-patterns')
@@ -55,6 +57,8 @@ test('detects guarded bash commands without flagging safe commands', () => {
   assert.equal(findGuardedBashCommand('grep foo src'), 'grep')
   assert.equal(findGuardedBashCommand('find . -name package.json'), 'find')
   assert.equal(findGuardedBashCommand('cat README.md'), 'cat')
+  assert.equal(findGuardedBashCommand('ls src | grep foo'), 'grep')
+  assert.equal(findGuardedBashCommand('printf x | tail -n 1'), 'tail')
   assert.equal(findGuardedBashCommand('git grep foo'), null)
   assert.equal(findGuardedBashCommand('npm test'), null)
 })

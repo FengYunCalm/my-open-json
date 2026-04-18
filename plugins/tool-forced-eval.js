@@ -311,9 +311,10 @@ function buildRecommendedMcpLines(mcps) {
   ];
 }
 
-function buildEvomemoryPriorityLines(mcpNames, config) {
+function buildEvomemoryPriorityLines(mcpNames, routing, config) {
   if (!config.emphasizeEvomemory) return [];
   if (!mcpNames.includes("evomemory")) return [];
+  if (!routing.mcps.some((mcp) => mcp.name === "evomemory")) return [];
 
   return [
     "### EvoMemory Priority",
@@ -338,7 +339,7 @@ function buildInstruction({ mcpNames, reusableSkills, routing, includeVisibleMcp
     "- `Skill` tool → OpenCode's native `skill` tool",
     "- `Read`, `Write`, `Edit`, `Bash` → native workspace tools",
     "",
-    ...buildEvomemoryPriorityLines(mcpNames, config),
+    ...buildEvomemoryPriorityLines(mcpNames, routing, config),
     "### Current Task Routing",
     `- Detected intent: \`${routing.intent.label}\``,
     `- Summary: ${routing.summary}`,

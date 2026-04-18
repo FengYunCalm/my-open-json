@@ -20,8 +20,25 @@ test('tool-forced-eval and evomemory system prompts can coexist', async () => {
         ok: true,
         json: async () => ({
           wing: 'opencode',
-          system_block: "Optional historical context from EvoMemory for wing 'opencode'. Use only if it directly helps the current request:\n1. [0.99][session] drawer=drawer_demo room=opencode-session role=assistant src=session:ses_demo\n   Prior decision: treat evomemory as a high-value history source.",
-          results: [],
+          core_memory: [
+            {
+              memory_tier: 'project_memory',
+              memory_key: 'git_commit_behavior',
+              memory_value: 'confirm_first',
+              source_file: 'session:ses_demo',
+            },
+          ],
+          results: [
+            {
+              drawer_id: 'drawer_demo',
+              search_tier: 'session',
+              similarity: 0.99,
+              room: 'opencode-session',
+              role: 'assistant',
+              source_file: 'session:ses_demo',
+              reason_summary: 'keyword(prior, decisions), tier(session)',
+            },
+          ],
         }),
       }
     }
