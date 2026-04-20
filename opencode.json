@@ -5,8 +5,8 @@
   "provider": {
     "openai": {
       "options": {
-       "baseURL": "http://127.0.0.1:4000/v1",
-        "apiKey": "sk-351272c47690a73102d142e29367a1fa32fa9647210e8993"
+       "baseURL": "xxx",
+        "apiKey": "xxx"
       },
       "models": {
         "gpt-5.4": {
