@@ -1,0 +1,44 @@
+{
+  "skill_name": "awesome-design",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "参考 Vercel 的气质做一个开发者工具落地页，想要黑白、克制、代码味重。",
+      "expected_output": "主参考应为 Vercel，或至少把 Vercel 放在首位，并说明黑白精确、开发者工具、代码导向这些匹配原因。",
+      "expectations": [
+        "The output picks Vercel as the primary reference",
+        "The output explains why black-and-white precision and developer-tool cues fit Vercel",
+        "The output includes a source URL or local docs used"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "我想做一个 AI 控制台页面，要暗色、终端感、像黑客工具，不要花哨营销页。",
+      "expected_output": "应优先给出 Ollama、Warp、VoltAgent、OpenCode AI 这一类终端或开发者工具参考，而不是跑偏到消费级品牌。",
+      "expectations": [
+        "The output chooses a terminal-native or dark developer-tool reference",
+        "The output does not choose a photography-led retail brand as the primary reference",
+        "The output lists concrete design cues to apply"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "给我一个温暖、编辑感、适合长文阅读的产品文档站风格。",
+      "expected_output": "应优先给出 Claude、Notion、Mintlify 或相近参考，并解释阅读友好、编辑感、温暖这些线索。",
+      "expectations": [
+        "The output chooses Claude, Notion, Mintlify, or another clearly reading-friendly editorial reference",
+        "The output explains the editorial or reading-friendly fit",
+        "The output includes alternate references"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "把这个 React 列表的滚动性能问题修一下。",
+      "expected_output": "这个请求不应该触发 awesome-design，因为它是性能修复，不是设计参考选择。",
+      "expectations": [
+        "The skill should not be selected for a pure performance-debugging request",
+        "The description should stay narrow enough to avoid generic frontend work"
+      ]
+    }
+  ]
+}

@@ -1,37 +1,42 @@
 ---
 name: bmad-review-adversarial-general
-description: 'Perform a Cynical Review and produce a findings report. Use when the user requests a critical review of something'
+description: Use when reviewing a diff, spec, plan, or document with an intentionally skeptical lens focused on hidden risks, weak assumptions, and missing safeguards.
 ---
 
-# Adversarial Review (General)
+# Adversarial Review
 
-**Goal:** Cynically review content and produce findings.
+## Overview
 
-**Your Role:** You are a cynical, jaded reviewer with zero patience for sloppy work. The content was submitted by a clueless weasel and you expect to find problems. Be skeptical of everything. Look for what's missing, not just what's wrong. Use a precise, professional tone — no profanity or personal attacks.
+This skill reviews with healthy skepticism. The point is to surface the problems that a friendly or surface-level review may miss, especially missing assumptions, hidden risks, and weak reasoning.
 
-**Inputs:**
-- **content** — Content to review: diff, spec, story, doc, or any artifact
-- **also_consider** (optional) — Areas to keep in mind during review alongside normal adversarial analysis
+## Mode Selection
 
+Use **diff mode** for code changes.
 
-## EXECUTION
+Use **spec mode** for requirements, plans, or designs.
 
-### Step 1: Receive Content
+Use **document mode** for prose artifacts that may hide risky assumptions.
 
-- Load the content to review from provided input or context
-- If content to review is empty, ask for clarification and abort
-- Identify content type (diff, branch, uncommitted changes, document, etc.)
+## Workflow
 
-### Step 2: Adversarial Analysis
+1. Identify the artifact type and scope.
+2. Look for missing assumptions, unsafe defaults, weak reasoning, and likely regressions.
+3. Report only material findings.
+4. If nothing serious is found, say so and name the remaining blind spots.
 
-Review with extreme skepticism — assume problems exist. Find at least ten issues to fix or improve in the provided content.
+## Output Format
 
-### Step 3: Present Findings
+```markdown
+## Findings
 
-Output findings as a Markdown list (descriptions only).
+1. **Severity:**
+   **Location:**
+   **Issue:**
+   **Why it matters:**
+   **Suggested next check:**
+```
 
+## Notes
 
-## HALT CONDITIONS
-
-- HALT if zero findings — this is suspicious, re-analyze or ask for guidance
-- HALT if content is empty or unreadable
+- Do not invent findings to satisfy a quota.
+- A clean review is allowed if the artifact truly holds up.

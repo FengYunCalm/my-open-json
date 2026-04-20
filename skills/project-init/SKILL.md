@@ -1,116 +1,42 @@
-﻿---
+---
 name: project-init
-description: Initialize project context by loading configuration, progress logs, and displaying current project status. Use when starting work on a project or when asked to "initialize project", "椤圭洰鍒濆鍖?.
+description: Use when starting work in an unfamiliar project and you need a quick read on repo type, key files, tracking artifacts, and current status.
 ---
 
-# Project Init Skill
+# Project Init
 
-## Local Integration Note
+## Overview
 
-- If the project has no PROGRESS.md, TODO.md, or equivalent tracking files, skip that part instead of fabricating them.
+This skill gives you a fast, trustworthy starting snapshot of a project. It is useful when you need context before planning or implementation, especially in a repo you have not touched recently.
 
+## Mode Selection
 
-This skill initializes the project context, loads configuration files, and displays the current project status to prepare for development tasks.
+Use **quick scan** when you only need repo type, framework, and key entry points.
 
-## When to Activate
+Use **tracked-project scan** when the repo also uses files such as `PROGRESS.md`, `TODO.md`, or similar status artifacts.
 
-- Starting work on a new project
-- User says "椤圭洰鍒濆鍖? or "initialize project"
-- Need to understand project structure and current progress
-- Beginning a new development session
+## Workflow
 
-## Execution Steps
-
-### 1. Read Project Configuration
-- Locate and read project configuration files
-- Identify project type (MUD, Web, Mobile, etc.)
-- Load project-specific settings and rules
-
-### 2. Load Progress Logs
-- Read PROGRESS.md or similar progress tracking files
-- Load TODO.md or task lists
-- Review recent changes and completed work
-
-### 3. Display Project Status
-Show comprehensive project information:
-```
-馃搳 Project Status
-
-馃搧 Project: [Project Name]
-馃敡 Type: [Project Type]
-馃搱 Current Phase: [Phase]
-鉁?Completed Tasks: [Count]
-鈴?Pending Tasks: [Count]
-馃幆 Current Focus: [Focus Area]
-```
-
-## Project Structure Detection
-
-### MUD Projects
-```
-Check for:
-- modules/ directory
-- daemons/ directory
-- config.json or similar
-- PROGRESS.md
-```
-
-### Web Projects
-```
-Check for:
-- package.json
-- src/ directory
-- README.md
-- PROGRESS.md
-```
-
-### Mobile Projects
-```
-Check for:
-- App manifest (Android/iOS)
-- src/ or app/ directory
-- Platform-specific configs
-```
+1. Identify the repo type and dominant tech stack.
+2. Read the highest-signal files first, such as `README`, config files, and project rules.
+3. Read tracking files only if they actually exist.
+4. Summarize current state without inventing missing structure.
 
 ## Output Format
 
+```markdown
+## Project Snapshot
+
+**Project type:**
+**Key technologies:**
+**Important files:**
+**Tracking artifacts found:**
+**Current focus / status:**
+**Open questions:**
 ```
-馃殌 Project Initialization Complete
-
-馃搵 Project Overview:
-   - Name: [Name]
-   - Type: [Type]
-   - Framework: [Framework]
-
-馃搳 Current Progress:
-   - Phase: [Current Phase]
-   - Tasks Completed: [X/Y]
-   - Last Updated: [Date]
-
-馃幆 Ready for Development:
-   - Configuration loaded
-   - Progress logs synced
-   - Project context ready
-```
-
-## Verification Checklist
-
-- [ ] Project configuration files located
-- [ ] Progress logs loaded successfully
-- [ ] Project type identified correctly
-- [ ] Current phase determined
-- [ ] No critical configuration errors
-- [ ] Ready to proceed with development
 
 ## Notes
 
-- Always run this skill before starting development tasks
-- If configuration is missing, ask user for clarification
-- Update progress logs after significant changes
-- Maintain accurate project state for better assistance
-
----
-
-**Remember**: Proper initialization ensures accurate context and better development assistance.
-
-
+- Do not assume every project has progress logs.
+- Do not create missing tracking files unless the user asks.
+- Use this skill when context is missing, not as a ritual before every task.

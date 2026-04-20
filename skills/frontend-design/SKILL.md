@@ -1,42 +1,62 @@
 ---
 name: frontend-design
-description: Create distinctive, production-grade frontend interfaces with high design quality. Use this skill when the user asks to build web components, pages, artifacts, posters, or applications (examples include websites, landing pages, dashboards, React components, HTML/CSS layouts, or when styling/beautifying any web UI). Generates creative, polished code and UI design that avoids generic AI aesthetics.
+description: Use when building or restyling a web page or UI component where visual direction, polish, and production-grade frontend implementation matter more than generic defaults.
 license: Complete terms in LICENSE.txt
 ---
 
-This skill guides creation of distinctive, production-grade frontend interfaces that avoid generic "AI slop" aesthetics. Implement real working code with exceptional attention to aesthetic details and creative choices.
+# Frontend Design
 
-The user provides frontend requirements: a component, page, application, or interface to build. They may include context about the purpose, audience, or technical constraints.
+## Overview
 
-## Design Thinking
+This skill helps produce frontend work that feels intentionally designed rather than template-generated. The key is to choose a clear visual direction first, then implement it with enough restraint or richness to make the direction believable.
 
-Before coding, understand the context and commit to a BOLD aesthetic direction:
-- **Purpose**: What problem does this interface solve? Who uses it?
-- **Tone**: Pick an extreme: brutally minimal, maximalist chaos, retro-futuristic, organic/natural, luxury/refined, playful/toy-like, editorial/magazine, brutalist/raw, art deco/geometric, soft/pastel, industrial/utilitarian, etc. There are so many flavors to choose from. Use these for inspiration but design one that is true to the aesthetic direction.
-- **Constraints**: Technical requirements (framework, performance, accessibility).
-- **Differentiation**: What makes this UNFORGETTABLE? What's the one thing someone will remember?
+Use this skill for actual UI implementation. If the problem is mainly React component API design, use `vercel-composition-patterns`. If the problem is mainly performance, rendering, hydration, or bundle behavior, use `vercel-react-best-practices`.
 
-**CRITICAL**: Choose a clear conceptual direction and execute it with precision. Bold maximalism and refined minimalism both work - the key is intentionality, not intensity.
+## Mode Selection
 
-Then implement working code (HTML/CSS/JS, React, Vue, etc.) that is:
-- Production-grade and functional
-- Visually striking and memorable
-- Cohesive with a clear aesthetic point-of-view
-- Meticulously refined in every detail
+Use **new page mode** for a fresh page, landing page, dashboard, or flow.
 
-## Frontend Aesthetics Guidelines
+Use **existing-system mode** when the repo already has a design language that must be respected.
 
-Focus on:
-- **Typography**: Choose fonts that are beautiful, unique, and interesting. Avoid generic fonts like Arial and Inter; opt instead for distinctive choices that elevate the frontend's aesthetics; unexpected, characterful font choices. Pair a distinctive display font with a refined body font.
-- **Color & Theme**: Commit to a cohesive aesthetic. Use CSS variables for consistency. Dominant colors with sharp accents outperform timid, evenly-distributed palettes.
-- **Motion**: Use animations for effects and micro-interactions. Prioritize CSS-only solutions for HTML. Use Motion library for React when available. Focus on high-impact moments: one well-orchestrated page load with staggered reveals (animation-delay) creates more delight than scattered micro-interactions. Use scroll-triggering and hover states that surprise.
-- **Spatial Composition**: Unexpected layouts. Asymmetry. Overlap. Diagonal flow. Grid-breaking elements. Generous negative space OR controlled density.
-- **Backgrounds & Visual Details**: Create atmosphere and depth rather than defaulting to solid colors. Add contextual effects and textures that match the overall aesthetic. Apply creative forms like gradient meshes, noise textures, geometric patterns, layered transparencies, dramatic shadows, decorative borders, custom cursors, and grain overlays.
+Use **component polish mode** when the task is focused on a smaller UI surface that still needs stronger visual character.
 
-NEVER use generic AI-generated aesthetics like overused font families (Inter, Roboto, Arial, system fonts), cliched color schemes (particularly purple gradients on white backgrounds), predictable layouts and component patterns, and cookie-cutter design that lacks context-specific character.
+## Workflow
 
-Interpret creatively and make unexpected choices that feel genuinely designed for the context. No design should be the same. Vary between light and dark themes, different fonts, different aesthetics. NEVER converge on common choices (Space Grotesk, for example) across generations.
+1. Identify audience, purpose, constraints, and technical stack.
+2. Choose a strong aesthetic direction.
+3. Define the visual system: typography, color, spacing, motion, and background treatment.
+4. Implement the UI so the code supports that direction cleanly.
+5. Verify the result still works on desktop and mobile.
 
-**IMPORTANT**: Match implementation complexity to the aesthetic vision. Maximalist designs need elaborate code with extensive animations and effects. Minimalist or refined designs need restraint, precision, and careful attention to spacing, typography, and subtle details. Elegance comes from executing the vision well.
+## Design Guidance
 
-Remember: Claude is capable of extraordinary creative work. Don't hold back, show what can truly be created when thinking outside the box and committing fully to a distinctive vision.
+- Prefer a memorable direction over safe sameness.
+- Use typography and spacing as primary design tools, not only color.
+- Match motion complexity to the concept; not every screen needs heavy animation.
+- If the project already has a strong design system, adapt to it instead of replacing it.
+- Avoid generic AI aesthetics such as timid palettes, overused fonts, predictable centered layouts, and interchangeable component patterns.
+- Choose a bold conceptual direction and execute it precisely; intentional minimalism and intentional maximalism are both valid.
+
+## Output Format
+
+```markdown
+## Frontend Design Direction
+
+**Mode:**
+**Aesthetic direction:**
+**Key visual decisions:**
+**Implementation notes:**
+**Responsive / accessibility notes:**
+```
+
+## Examples
+
+**Example 1:** A marketing landing page may justify a bold visual concept and strong motion moments.
+
+**Example 2:** An internal dashboard may still be distinctive, but usually needs more restraint and denser information handling.
+
+## Related Skills
+
+- Use `webapp-testing` after implementation when the user wants browser-level verification of an interactive UI.
+- Use `vercel-composition-patterns` for component API and composition problems.
+- Use `vercel-react-best-practices` for React and Next.js performance or rendering bottlenecks.

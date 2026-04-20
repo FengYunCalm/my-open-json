@@ -1,117 +1,78 @@
 ---
 name: using-superpowers
-description: Use when starting any conversation - establishes how to find and use skills, requiring Skill tool invocation before ANY response including clarifying questions
+description: Use when starting a session or switching to a new task and one or more installed skills may materially improve the workflow, accuracy, or output quality.
 ---
 
 <SUBAGENT-STOP>
 If you were dispatched as a subagent to execute a specific task, skip this skill.
 </SUBAGENT-STOP>
 
-<EXTREMELY-IMPORTANT>
-If you think there is even a 1% chance a skill might apply to what you are doing, you ABSOLUTELY MUST invoke the skill.
+# Using Superpowers
 
-IF A SKILL APPLIES TO YOUR TASK, YOU DO NOT HAVE A CHOICE. YOU MUST USE IT.
+## Overview
 
-This is not negotiable. This is not optional. You cannot rationalize your way out of this.
-</EXTREMELY-IMPORTANT>
+Installed skills are valuable when they add a better workflow, sharper output format, or domain-specific judgment. The main mistake this skill prevents is charging into work with generic habits when a better local skill already exists.
 
-## Instruction Priority
+## How to Use It
 
-Superpowers skills override default system prompt behavior, but **user instructions always take precedence**:
+Before deep analysis or implementation:
+1. Identify the user's real goal.
+2. Ask whether a skill would materially help with planning, debugging, testing, review, design, research, or a domain-specific workflow.
+3. If yes, load the smallest relevant set of skills early.
+4. If no, continue normally instead of forcing a skill.
 
-1. **User's explicit instructions** (CLAUDE.md, GEMINI.md, AGENTS.md, direct requests) — highest priority
-2. **Superpowers skills** — override default system behavior where they conflict
-3. **Default system prompt** — lowest priority
+## Priority
 
-If CLAUDE.md, GEMINI.md, or AGENTS.md says "don't use TDD" and a skill says "always use TDD," follow the user's instructions. The user is in control.
+Follow instructions in this order:
+1. User instructions
+2. Project rules such as `AGENTS.md`, `CLAUDE.md`, or `GEMINI.md`
+3. Loaded skills
+4. Default assistant behavior
 
-## How to Access Skills
+If project rules and a skill disagree, follow the project rules.
 
-**In Claude Code:** Use the `Skill` tool. When you invoke a skill, its content is loaded and presented to you—follow it directly. Never use the Read tool on skill files.
+## When a Skill Is Worth Loading
 
-**In Copilot CLI:** Use the `skill` tool. Skills are auto-discovered from installed plugins. The `skill` tool works the same as Claude Code's `Skill` tool.
+Load a skill when at least one of these is true:
+- the task matches a known workflow such as debugging, TDD, review, or planning
+- the task is domain-specific enough that a skill has better rules than generic reasoning
+- the output format matters and a skill defines a reliable structure
+- the task is risky enough that a disciplined workflow reduces avoidable mistakes
 
-**In Gemini CLI:** Skills activate via the `activate_skill` tool. Gemini loads skill metadata at session start and activates the full content on demand.
+## When Not to Force It
 
-**In other environments:** Check your platform's documentation for how skills are loaded.
-
-## Platform Adaptation
-
-Skills use Claude Code tool names. Non-CC platforms: see `references/copilot-tools.md` (Copilot CLI), `references/codex-tools.md` (Codex) for tool equivalents. Gemini CLI users get the tool mapping loaded automatically via GEMINI.md.
-
-# Using Skills
-
-## The Rule
-
-**Invoke relevant or requested skills BEFORE any response or action.** Even a 1% chance a skill might apply means that you should invoke the skill to check. If an invoked skill turns out to be wrong for the situation, you don't need to use it.
-
-```dot
-digraph skill_flow {
-    "User message received" [shape=doublecircle];
-    "About to EnterPlanMode?" [shape=doublecircle];
-    "Already brainstormed?" [shape=diamond];
-    "Invoke brainstorming skill" [shape=box];
-    "Might any skill apply?" [shape=diamond];
-    "Invoke Skill tool" [shape=box];
-    "Announce: 'Using [skill] to [purpose]'" [shape=box];
-    "Has checklist?" [shape=diamond];
-    "Create TodoWrite todo per item" [shape=box];
-    "Follow skill exactly" [shape=box];
-    "Respond (including clarifications)" [shape=doublecircle];
-
-    "About to EnterPlanMode?" -> "Already brainstormed?";
-    "Already brainstormed?" -> "Invoke brainstorming skill" [label="no"];
-    "Already brainstormed?" -> "Might any skill apply?" [label="yes"];
-    "Invoke brainstorming skill" -> "Might any skill apply?";
-
-    "User message received" -> "Might any skill apply?";
-    "Might any skill apply?" -> "Invoke Skill tool" [label="yes, even 1%"];
-    "Might any skill apply?" -> "Respond (including clarifications)" [label="definitely not"];
-    "Invoke Skill tool" -> "Announce: 'Using [skill] to [purpose]'";
-    "Announce: 'Using [skill] to [purpose]'" -> "Has checklist?";
-    "Has checklist?" -> "Create TodoWrite todo per item" [label="yes"];
-    "Has checklist?" -> "Follow skill exactly" [label="no"];
-    "Create TodoWrite todo per item" -> "Follow skill exactly";
-}
-```
+Skip extra skill loading when:
+- the task is trivial and no skill adds material value
+- a previously loaded skill already covers the current step
+- the user explicitly wants a direct answer or a narrow one-step action
 
 ## Red Flags
 
-These thoughts mean STOP—you're rationalizing:
+These thoughts usually mean you should at least check for a relevant skill:
 
-| Thought | Reality |
-|---------|---------|
-| "This is just a simple question" | Questions are tasks. Check for skills. |
-| "I need more context first" | Skill check comes BEFORE clarifying questions. |
-| "Let me explore the codebase first" | Skills tell you HOW to explore. Check first. |
-| "I can check git/files quickly" | Files lack conversation context. Check for skills. |
-| "Let me gather information first" | Skills tell you HOW to gather information. |
-| "This doesn't need a formal skill" | If a skill exists, use it. |
-| "I remember this skill" | Skills evolve. Read current version. |
-| "This doesn't count as a task" | Action = task. Check for skills. |
-| "The skill is overkill" | Simple things become complex. Use it. |
-| "I'll just do this one thing first" | Check BEFORE doing anything. |
-| "This feels productive" | Undisciplined action wastes time. Skills prevent this. |
-| "I know what that means" | Knowing the concept ≠ using the skill. Invoke it. |
+| Thought | Better response |
+|---------|-----------------|
+| "I'll just start and see" | Check whether a workflow skill would reduce rework first. |
+| "This is probably too simple for a skill" | Simple requests can still benefit from the right structure. |
+| "I already know this skill" | Reload only if needed, but don't rely on stale memory when the skill is central. |
+| "I need more context before I decide" | Often the skill is what tells you how to gather that context. |
 
-## Skill Priority
+## Skill Order of Operations
 
-When multiple skills could apply, use this order:
+When several skills could apply, prefer this order:
+1. Process skills such as planning, debugging, or verification
+2. Implementation or domain skills such as frontend, React, relay, or graph workflows
 
-1. **Process skills first** (brainstorming, debugging) - these determine HOW to approach the task
-2. **Implementation skills second** (frontend-design, mcp-builder) - these guide execution
+## Examples
 
-"Let's build X" → brainstorming first, then implementation skills.
-"Fix this bug" → debugging first, then domain-specific skills.
+**Example 1**
 
-## Skill Types
+User: "This failing test is weird. Can you figure it out?"
 
-**Rigid** (TDD, debugging): Follow exactly. Don't adapt away discipline.
+Response pattern: load `systematic-debugging` before proposing fixes.
 
-**Flexible** (patterns): Adapt principles to context.
+**Example 2**
 
-The skill itself tells you which.
+User: "We need a new settings flow for this feature."
 
-## User Instructions
-
-Instructions say WHAT, not HOW. "Add X" or "Fix Y" doesn't mean skip workflows.
+Response pattern: load `brainstorming` before implementation if requirements or design choices are still open.

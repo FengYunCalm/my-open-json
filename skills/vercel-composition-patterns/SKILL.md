@@ -1,11 +1,6 @@
-﻿---
+---
 name: vercel-composition-patterns
-description:
-  React composition patterns that scale. Use when refactoring components with
-  boolean prop proliferation, building flexible component libraries, or
-  designing reusable APIs. Triggers on tasks involving compound components,
-  render props, context providers, or component architecture. Includes React 19
-  API changes.
+description: Use when React or Next.js component APIs are getting awkward, especially with boolean prop proliferation, compound component needs, context design, or reusable component architecture.
 license: MIT
 metadata:
   author: vercel
@@ -14,84 +9,50 @@ metadata:
 
 # React Composition Patterns
 
-## Local Integration Note
+## Overview
 
-- Use only for React/Next.js component architecture tasks.
-- Do not load it for non-React codebases.
+This skill helps restructure React component APIs so they scale cleanly. The core idea is to replace hidden conditional behavior with clearer composition boundaries.
 
+## Symptom Routing
 
-Composition patterns for building flexible, maintainable React components. Avoid
-boolean prop proliferation by using compound components, lifting state, and
-composing internals. These patterns make codebases easier for both humans and AI
-agents to work with as they scale.
+If the problem is **too many boolean props**, start with:
+- `rules/architecture-avoid-boolean-props.md`
 
-## When to Apply
+If the problem is **shared state across composed pieces**, start with:
+- `rules/architecture-compound-components.md`
+- `rules/state-context-interface.md`
 
-Reference these guidelines when:
+If the problem is **variant explosion**, start with:
+- `rules/patterns-explicit-variants.md`
 
-- Refactoring components with many boolean props
-- Building reusable component libraries
-- Designing flexible component APIs
-- Reviewing component architecture
-- Working with compound components or context providers
+If the task is **React 19 specific**, check the `react19-` rules only when the codebase is actually on React 19.
 
-## Rule Categories by Priority
+## Workflow
 
-| Priority | Category                | Impact | Prefix          |
-| -------- | ----------------------- | ------ | --------------- |
-| 1        | Component Architecture  | HIGH   | `architecture-` |
-| 2        | State Management        | MEDIUM | `state-`        |
-| 3        | Implementation Patterns | MEDIUM | `patterns-`     |
-| 4        | React 19 APIs           | MEDIUM | `react19-`      |
+1. Identify the API or architecture smell.
+2. Pick the smallest relevant rule group.
+3. Apply the rule to the real component shape in this repo.
+4. Prefer explicit variants and composition over hidden mode switches.
 
-## Quick Reference
+## Rule Groups
 
-### 1. Component Architecture (HIGH)
+- `architecture-` for component boundaries and boolean-prop problems
+- `state-` for provider and context design
+- `patterns-` for implementation choices such as variants or children composition
+- `react19-` for React 19 specific guidance
 
-- `architecture-avoid-boolean-props` - Don't add boolean props to customize
-  behavior; use composition
-- `architecture-compound-components` - Structure complex components with shared
-  context
+## Output Format
 
-### 2. State Management (MEDIUM)
+```markdown
+## Composition Recommendation
 
-- `state-decouple-implementation` - Provider is the only place that knows how
-  state is managed
-- `state-context-interface` - Define generic interface with state, actions, meta
-  for dependency injection
-- `state-lift-state` - Move state into provider components for sibling access
-
-### 3. Implementation Patterns (MEDIUM)
-
-- `patterns-explicit-variants` - Create explicit variant components instead of
-  boolean modes
-- `patterns-children-over-render-props` - Use children for composition instead
-  of renderX props
-
-### 4. React 19 APIs (MEDIUM)
-
-> **鈿狅笍 React 19+ only.** Skip this section if using React 18 or earlier.
-
-- `react19-no-forwardref` - Don't use `forwardRef`; use `use()` instead of `useContext()`
-
-## How to Use
-
-Read individual rule files for detailed explanations and code examples:
-
-```
-rules/architecture-avoid-boolean-props.md
-rules/state-context-interface.md
+**Problem:**
+**Rule group used:**
+**Recommended API shape:**
+**Tradeoffs:**
 ```
 
-Each rule file contains:
+## Notes
 
-- Brief explanation of why it matters
-- Incorrect code example with explanation
-- Correct code example with explanation
-- Additional context and references
-
-## Full Compiled Document
-
-For the complete guide with all rules expanded: `AGENTS.md`
-
-
+- Use only for React or Next.js component architecture work.
+- Read only the rule files needed for the current symptom.
