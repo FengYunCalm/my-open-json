@@ -6,6 +6,7 @@ import {
   classifyIntent,
   detectSkillRecommendations,
   findGuardedBashCommand,
+  getInjectionSkipReason,
   isLikelySmallTalk,
   shouldInject,
 } from '../tool-forced-eval.helpers.mjs'
@@ -15,6 +16,11 @@ test('filters english and chinese tiny small-talk without blocking substantive c
   assert.equal(isLikelySmallTalk('好的'), true)
   assert.equal(isLikelySmallTalk('继续'), true)
   assert.equal(isLikelySmallTalk('继续分析这个实现'), false)
+  assert.equal(getInjectionSkipReason(''), 'empty-text')
+  assert.equal(getInjectionSkipReason('/review'), 'slash-command')
+  assert.equal(getInjectionSkipReason('谢谢'), 'small-talk')
+  assert.equal(getInjectionSkipReason('please do not repeat <OPENCODE_TOOL_FORCED_EVAL>'), 'marker-echo')
+  assert.equal(getInjectionSkipReason('继续分析这个实现'), null)
   assert.equal(shouldInject('谢谢'), false)
   assert.equal(shouldInject('继续分析这个实现'), true)
 })
@@ -59,6 +65,8 @@ test('detects guarded bash commands without flagging safe commands', () => {
   assert.equal(findGuardedBashCommand('cat README.md'), 'cat')
   assert.equal(findGuardedBashCommand('ls src | grep foo'), 'grep')
   assert.equal(findGuardedBashCommand('printf x | tail -n 1'), 'tail')
+  assert.equal(findGuardedBashCommand('env FOO=1 bash -lc "grep foo src"'), 'grep')
+  assert.equal(findGuardedBashCommand('FOO=1 grep foo src'), 'grep')
   assert.equal(findGuardedBashCommand('git grep foo'), null)
   assert.equal(findGuardedBashCommand('npm test'), null)
 })

@@ -84,7 +84,7 @@ const REASONING_HINTS = [
   /(方案|设计|架构|取舍|比较|为什么|排查|审查|重构)/,
 ]
 
-const SKILL_HINTS = [
+export const SKILL_HINTS = [
   {
     name: 'writing-plans',
     reason: 'Write or refine a concrete implementation plan before editing.',
@@ -137,12 +137,18 @@ export function isLikelySmallTalk(text = '') {
   return SMALL_TALK_PATTERNS.some((pattern) => pattern.test(normalized))
 }
 
+export function getInjectionSkipReason(text = '') {
+  if (!text) return 'empty-text'
+  if (text.includes('<OPENCODE_TOOL_FORCED_EVAL>') || text.includes('<OPENCODE_SKILL_FORCED_EVAL>')) {
+    return 'marker-echo'
+  }
+  if (isLikelySlashCommand(text)) return 'slash-command'
+  if (isLikelySmallTalk(text)) return 'small-talk'
+  return null
+}
+
 export function shouldInject(text = '') {
-  if (!text) return false
-  if (text.includes('<OPENCODE_TOOL_FORCED_EVAL>') || text.includes('<OPENCODE_SKILL_FORCED_EVAL>')) return false
-  if (isLikelySlashCommand(text)) return false
-  if (isLikelySmallTalk(text)) return false
-  return true
+  return getInjectionSkipReason(text) === null
 }
 
 function matchesAny(patterns, text) {

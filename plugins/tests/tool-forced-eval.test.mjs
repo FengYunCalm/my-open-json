@@ -14,6 +14,14 @@ const createPlugin = (options = {}) =>
     configOverrides: options.configOverrides,
   })
 
+const createPluginWithLogs = (logs, options = {}) =>
+  ToolForcedEvalPlugin({
+    client: { app: { log: async (entry) => logs.push(entry.body) } },
+    directory: options.directory ?? '/home/mechrevo/.config/opencode',
+    worktree: options.worktree ?? '/home/mechrevo/.config/opencode',
+    configOverrides: options.configOverrides,
+  })
+
 test('injects routed tool-forced-eval guidance through system transform', async () => {
   const plugin = await createPlugin()
 
@@ -70,6 +78,32 @@ test('skips system prompt injection for slash commands', async () => {
   )
 
   assert.equal(output.system.length, 0)
+})
+
+test('logs why task routing guidance was skipped', async () => {
+  const logs = []
+  const plugin = await createPluginWithLogs(logs)
+
+  for (const [sessionID, text] of [
+    ['session-skip-slash', '/review'],
+    ['session-skip-small-talk', 'ok'],
+    ['session-skip-marker', 'please do not repeat <OPENCODE_TOOL_FORCED_EVAL>'],
+  ]) {
+    await plugin['chat.message'](
+      { sessionID },
+      {
+        message: { parts: [] },
+        parts: [{ type: 'text', text }],
+      },
+    )
+  }
+
+  const skippedLogs = logs.filter((entry) => entry.message === 'Skipped task routing guidance')
+  assert.equal(skippedLogs.length, 3)
+  assert.deepEqual(
+    skippedLogs.map((entry) => entry.extra?.skipReason).sort(),
+    ['marker-echo', 'slash-command', 'small-talk'],
+  )
 })
 
 test('skips system prompt injection for tiny english and chinese small-talk plus marker echoes', async () => {
@@ -481,6 +515,73 @@ test('can disable the visible MCP appendix for unclear tasks through config over
   assert.doesNotMatch(injected, /Visible MCP tools from local config:/)
 })
 
+test('normalizes invalid config overrides back to safe defaults', async () => {
+  const plugin = await createPlugin({
+    configOverrides: {
+      shortlistLimit: -1,
+      maxReusableSkillsInPrompt: -5,
+      skillReuseTtl: -1,
+      emphasizeEvomemory: 'yes',
+      includeVisibleMcpAppendixOnUnclearIntent: 'true',
+      enableBashGuardrails: 'true',
+      bashGuardrailMode: 'warn',
+      guardedBashCommands: 'grep',
+    },
+  })
+
+  await plugin['chat.message'](
+    { sessionID: 'session-invalid-config' },
+    {
+      message: { parts: [] },
+      parts: [{ type: 'text', text: '学习一下 tool-forced-eval 这个插件源码' }],
+    },
+  )
+
+  const output = { system: [] }
+  await plugin['experimental.chat.system.transform'](
+    { sessionID: 'session-invalid-config', model: {} },
+    output,
+  )
+
+  const injected = output.system.at(-1) ?? ''
+  assert.match(injected, /- `glob`: Find files by name or path pattern\./)
+  assert.match(injected, /- `grep`: Search repository contents for symbols, strings, or patterns\./)
+  assert.match(injected, /- `read`: Open only the relevant files and sections\./)
+
+  await assert.rejects(
+    plugin['tool.execute.before'](
+      { tool: 'bash', sessionID: 'session-invalid-config-block' },
+      { args: { command: 'grep foo src', description: 'Search source', workdir: '/tmp' } },
+    ),
+    /Use the dedicated `grep` tool/,
+  )
+})
+
+test('warns once when a local config file is invalid', async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tool-forced-eval-invalid-config-'))
+  const worktree = path.join(tempRoot, 'worktree')
+  const directory = path.join(tempRoot, 'directory')
+  fs.mkdirSync(worktree)
+  fs.mkdirSync(directory)
+  fs.writeFileSync(path.join(directory, 'opencode.jsonc'), '{ invalid jsonc')
+
+  const logs = []
+  const plugin = await createPluginWithLogs(logs, { directory, worktree })
+
+  await plugin['chat.message'](
+    { sessionID: 'session-invalid-config-log' },
+    {
+      message: { parts: [] },
+      parts: [{ type: 'text', text: 'show me the visible MCP tools for this session' }],
+    },
+  )
+
+  assert.equal(
+    logs.filter((entry) => entry.message === 'Failed to read config file').length,
+    1,
+  )
+})
+
 test('blocks guarded bash commands and allows safe ones', async () => {
   const plugin = await createPlugin()
 
@@ -519,6 +620,18 @@ test('blocks guarded bash commands and allows safe ones', async () => {
   await plugin['tool.execute.before'](
     { tool: 'bash', sessionID: 'session-bash-ok' },
     { args: { command: 'npm test', description: 'Run tests', workdir: '/tmp' } },
+  )
+
+  await assert.rejects(
+    plugin['tool.execute.before'](
+      {
+        tool: 'bash',
+        sessionID: 'session-bash-block-input-args',
+        args: { command: 'grep foo src', description: 'Search source', workdir: '/tmp' },
+      },
+      {},
+    ),
+    /Use the dedicated `grep` tool/,
   )
 })
 

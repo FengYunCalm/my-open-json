@@ -171,6 +171,7 @@ class ContextQueryService:
             payload["retrieval_trace"] = retrieval_trace
         result = self.core.runtime_orchestrator.augment_context_payload(payload)
         self._record_runtime_context(result)
+        self.core._persist_runtime_state()
         return result
 
     def mcp_status(self) -> dict[str, Any]:

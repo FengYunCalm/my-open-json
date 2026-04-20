@@ -1680,6 +1680,42 @@ def test_debug_status_reports_state_and_runtime_metadata():
     assert payload["maintenance_summary"]["last_revision_at"] is None
 
 
+def test_search_context_persists_runtime_summary_across_bridge_restarts():
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-search-runtime-"))
+    state_path = temp_dir / "state.sqlite3"
+    wing_config_path = temp_dir / "wing_config.json"
+
+    core = BridgeCore(
+        BridgeConfig(
+            max_block_chars=700,
+            state_path=state_path,
+            wing_config_path=wing_config_path,
+        ),
+        backend=FakeBackend(),
+    )
+
+    core.search_context(
+        "drawer navigation",
+        "/home/mechrevo/.config/opencode",
+        session_id="ses_demo",
+    )
+
+    reloaded = BridgeCore(
+        BridgeConfig(
+            max_block_chars=700,
+            state_path=state_path,
+            wing_config_path=wing_config_path,
+        ),
+        backend=FakeBackend(),
+    )
+    payload = reloaded.debug_status()
+
+    assert payload["last_search_at"] is not None
+    assert payload["last_search_summary"]["query"] == "drawer navigation"
+    assert payload["last_search_summary"]["session_id"] == "ses_demo"
+    assert payload["last_search_summary"]["system_block_length"] > 0
+
+
 def test_search_context_prioritizes_session_directory_wing_then_global():
     core, _backend = make_core()
 

@@ -43,6 +43,90 @@ function loadConfig() {
   }
 }
 
+function createSessionState(directory) {
+  return {
+    directory,
+    systemBlock: '',
+    lastSavedMessageID: null,
+    lastSavedMessageIndex: null,
+  }
+}
+
+function normalizeSessionDirectory(value, fallbackDirectory) {
+  return typeof value === 'string' && value.trim() ? value : fallbackDirectory
+}
+
+function getSessionState(sessions, sessionID, fallbackDirectory) {
+  let state = sessions.get(sessionID)
+  if (!state) {
+    state = createSessionState(fallbackDirectory)
+    sessions.set(sessionID, state)
+  }
+  return state
+}
+
+function patchSessionState(sessions, sessionID, patch, fallbackDirectory) {
+  const current = getSessionState(sessions, sessionID, fallbackDirectory)
+  const next = { ...current, ...patch }
+  sessions.set(sessionID, next)
+  return next
+}
+
+function normalizeFlushPayload(payload) {
+  const issues = []
+  const lastSavedMessageID =
+    typeof payload?.last_saved_message_id === 'string' && payload.last_saved_message_id.trim()
+      ? payload.last_saved_message_id
+      : null
+
+  if (payload && typeof payload === 'object' && payload.last_saved_message_id != null && !lastSavedMessageID) {
+    issues.push('invalid last_saved_message_id')
+  }
+
+  return { issues, lastSavedMessageID }
+}
+
+function normalizeSearchPayload(payload) {
+  const issues = []
+  const isObject = payload && typeof payload === 'object'
+  if (!isObject) {
+    return {
+      issues: ['payload is not an object'],
+      value: { wing: undefined, core_memory: [], results: [], retrieval_trace: null },
+    }
+  }
+
+  if (payload.core_memory != null && !Array.isArray(payload.core_memory)) {
+    issues.push('invalid core_memory')
+  }
+  if (payload.results != null && !Array.isArray(payload.results)) {
+    issues.push('invalid results')
+  }
+  if (
+    payload.retrieval_trace != null
+    && (typeof payload.retrieval_trace !== 'object' || Array.isArray(payload.retrieval_trace))
+  ) {
+    issues.push('invalid retrieval_trace')
+  }
+
+  return {
+    issues,
+    value: {
+      wing: typeof payload.wing === 'string' && payload.wing.trim() ? payload.wing : undefined,
+      core_memory: Array.isArray(payload.core_memory) ? payload.core_memory : [],
+      results: Array.isArray(payload.results) ? payload.results : [],
+      retrieval_trace:
+        payload.retrieval_trace && typeof payload.retrieval_trace === 'object' && !Array.isArray(payload.retrieval_trace)
+          ? payload.retrieval_trace
+          : null,
+    },
+  }
+}
+
+function findMessageIndex(messages, messageID) {
+  return messages.findIndex((message) => message?.info?.id === messageID)
+}
+
 async function log(client, level, message, extra = undefined) {
   await client?.app?.log?.({
     body: { service: 'evomemory-opencode', level, message, extra },
@@ -112,7 +196,7 @@ export const EvomemoryOpencodePlugin = async ({ client, directory, worktree, con
 
   async function flushSession(sessionID, reason) {
     if (!(await ensureBridge(config, client, dependencies))) return null
-    const sessionState = sessions.get(sessionID) ?? { directory: getDirectory(sessionID) }
+    const sessionState = getSessionState(sessions, sessionID, getDirectory(sessionID))
     const messages = await getMessages(client, sessionID)
     const latestMessageID = messages.at(-1)?.info?.id
     if (latestMessageID && latestMessageID === sessionState.lastSavedMessageID) return null
@@ -130,12 +214,32 @@ export const EvomemoryOpencodePlugin = async ({ client, directory, worktree, con
         messages: pending,
         reason,
       }),
-      fetchImpl: dependencies.fetchImpl,
-    })
-    sessions.set(sessionID, {
-      ...sessionState,
-      lastSavedMessageID: payload.last_saved_message_id ?? sessionState.lastSavedMessageID,
-      lastSavedMessageIndex: messages.length ? messages.length - 1 : sessionState.lastSavedMessageIndex,
+        fetchImpl: dependencies.fetchImpl,
+      })
+    const normalized = normalizeFlushPayload(payload)
+    if (normalized.issues.length) {
+      await log(client, 'warn', 'EvoMemory flush returned unexpected payload', {
+        sessionID,
+        issues: normalized.issues,
+      })
+    }
+    const ackID = normalized.lastSavedMessageID ?? sessionState.lastSavedMessageID ?? latestMessageID ?? null
+    const ackIndex = ackID ? findMessageIndex(messages, ackID) : -1
+    patchSessionState(
+      sessions,
+      sessionID,
+      {
+        lastSavedMessageID: ackID,
+        lastSavedMessageIndex:
+          ackIndex >= 0 ? ackIndex : sessionState.lastSavedMessageIndex,
+      },
+      getDirectory(sessionID),
+    )
+    await log(client, 'debug', 'EvoMemory session flush completed', {
+      sessionID,
+      reason,
+      pendingCount: pending.length,
+      ackID,
     })
     return payload
   }
@@ -144,7 +248,7 @@ export const EvomemoryOpencodePlugin = async ({ client, directory, worktree, con
     event: async ({ event }) => {
       if (event.type === 'session.created') {
         const info = event.properties.info
-        sessions.set(info.id, { directory: info.directory })
+        patchSessionState(sessions, info.id, { directory: info.directory }, getDirectory(info.id))
         if (await ensureBridge(config, client, dependencies)) {
           await fetchJson(config.bridgeBaseUrl, '/internal/session/start', {
             method: 'POST',
@@ -157,11 +261,15 @@ export const EvomemoryOpencodePlugin = async ({ client, directory, worktree, con
 
       if (event.type === 'session.updated') {
         const info = event.properties.info
-        const current = sessions.get(info.id) ?? {}
-        sessions.set(info.id, {
-          ...current,
-          directory: info.directory ?? current.directory ?? getDirectory(info.id),
-        })
+        const fallbackDirectory = getDirectory(info.id)
+        patchSessionState(
+          sessions,
+          info.id,
+          {
+            directory: normalizeSessionDirectory(info.directory, fallbackDirectory),
+          },
+          fallbackDirectory,
+        )
         return
       }
 
@@ -180,11 +288,7 @@ export const EvomemoryOpencodePlugin = async ({ client, directory, worktree, con
 
     'chat.message': async ({ sessionID }, output) => {
       const text = collectText(output.parts)
-      const current = sessions.get(sessionID) ?? { directory: getDirectory(sessionID) }
-      sessions.set(sessionID, {
-        ...current,
-        systemBlock: '',
-      })
+      patchSessionState(sessions, sessionID, { systemBlock: '' }, getDirectory(sessionID))
       if (config.autoFlushOnMessage && shouldPersist(text, config)) {
         await flushSession(sessionID, 'message').catch((error) =>
           log(client, 'warn', 'Message flush failed', { sessionID, error: String(error) }),
@@ -207,22 +311,37 @@ export const EvomemoryOpencodePlugin = async ({ client, directory, worktree, con
         return null
       })
       if (!search) return
-      if (config.logRetrievalTrace && search.retrieval_trace?.ranked_candidates?.length) {
-        const topCandidate = search.retrieval_trace.ranked_candidates.find((item) => item?.included) ?? search.retrieval_trace.ranked_candidates[0]
+      const normalizedSearch = normalizeSearchPayload(search)
+      if (normalizedSearch.issues.length) {
+        await log(client, 'warn', 'EvoMemory search returned unexpected payload', {
+          sessionID,
+          issues: normalizedSearch.issues,
+        })
+      }
+      if (config.logRetrievalTrace && normalizedSearch.value.retrieval_trace?.ranked_candidates?.length) {
+        const topCandidate = normalizedSearch.value.retrieval_trace.ranked_candidates.find((item) => item?.included) ?? normalizedSearch.value.retrieval_trace.ranked_candidates[0]
         await log(client, 'debug', 'EvoMemory retrieval trace', {
           sessionID,
           query: text,
-          candidateCount: search.retrieval_trace.candidate_count,
-          returnedCount: search.retrieval_trace.returned_count,
+          candidateCount: normalizedSearch.value.retrieval_trace.candidate_count,
+          returnedCount: normalizedSearch.value.retrieval_trace.returned_count,
           topDrawerId: topCandidate?.drawer_id ?? null,
           topReasons: topCandidate?.reasons ?? [],
           topScores: topCandidate?.scores ?? {},
         })
       }
-      const latest = sessions.get(sessionID) ?? { directory: getDirectory(sessionID) }
-      sessions.set(sessionID, {
-        ...latest,
-        systemBlock: buildSystemBlock(search, config.maxInjectedChars),
+      const systemBlock = buildSystemBlock(normalizedSearch.value, config.maxInjectedChars)
+      patchSessionState(
+        sessions,
+        sessionID,
+        { systemBlock },
+        getDirectory(sessionID),
+      )
+      await log(client, 'debug', 'EvoMemory context search completed', {
+        sessionID,
+        resultsCount: normalizedSearch.value.results.length,
+        coreMemoryCount: normalizedSearch.value.core_memory.length,
+        systemBlockLength: systemBlock.length,
       })
     },
 

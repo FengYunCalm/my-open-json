@@ -113,3 +113,44 @@ test('ensureBridge can spawn direct fallback without Bun globals', async () => {
     globalThis.Bun = originalBun
   }
 })
+
+test('ensureBridge passes injected env into direct fallback launch', async () => {
+  const spawnCalls = []
+
+  const ok = await ensureBridge(
+    {
+      bridgeBaseUrl: 'http://127.0.0.1:65535',
+      ensureBridgeCommand: [],
+      healthcheckCacheTtlMs: 0,
+    },
+    null,
+    {
+      env: {
+        HOME: '/home/tester',
+        PYTHONPATH: '/tmp/custom',
+        EVOMEMORY_PALACE_PATH: '/data/palace',
+      },
+      fetchImpl: async () => ({ ok: false, json: async () => ({ ok: false }) }),
+      spawnImpl: (options) => {
+        spawnCalls.push(options)
+        return { exited: Promise.resolve(0) }
+      },
+      sleepImpl: async () => {},
+      logImpl: async () => {},
+      now: () => Date.now(),
+    },
+  )
+
+  assert.equal(ok, false)
+  assert.equal(spawnCalls.length, 1)
+  assert.deepEqual(spawnCalls[0].cmd, [
+    '/home/tester/.local/opt/evomemory-opencode/venv/bin/python',
+    '/home/tester/.config/opencode/mcp/evomemory/interfaces/mcp/server.py',
+    '--host',
+    '127.0.0.1',
+    '--port',
+    '65535',
+  ])
+  assert.equal(spawnCalls[0].env.EVOMEMORY_PALACE_PATH, '/data/palace')
+  assert.equal(spawnCalls[0].env.PYTHONPATH, '/tmp/custom:/home/tester/.config/opencode/mcp')
+})

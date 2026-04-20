@@ -253,6 +253,193 @@ test('forwards include_trace and logs retrieval trace when enabled', async () =>
   assert.ok(logs.some((entry) => entry.message === 'EvoMemory retrieval trace'))
 })
 
+test('normalizes malformed flush and search payloads without polluting session state', async () => {
+  const logs = []
+
+  const fetchImpl = async (url) => {
+    if (String(url).endsWith('/health')) {
+      return jsonResponse({ ok: true })
+    }
+
+    if (String(url).endsWith('/internal/session/flush')) {
+      return jsonResponse({ last_saved_message_id: 123 })
+    }
+
+    if (String(url).endsWith('/internal/context/search')) {
+      return jsonResponse({
+        wing: 'opencode',
+        core_memory: { broken: true },
+        results: 'bad',
+        retrieval_trace: 'bad',
+      })
+    }
+
+    throw new Error(`unexpected url: ${url}`)
+  }
+
+  const plugin = await EvomemoryOpencodePlugin({
+    client: {
+      app: { log: async (entry) => logs.push(entry.body) },
+      session: {
+        messages: async () => ({
+          data: [
+            { info: { id: 'msg_bad_001', role: 'user' }, parts: [{ type: 'text', text: 'remember this' }] },
+          ],
+        }),
+      },
+    },
+    directory: '/home/mechrevo/.config/opencode',
+    worktree: '/home/mechrevo/.config/opencode',
+    configOverride: {
+      bridgeBaseUrl: 'http://127.0.0.1:8877',
+    },
+    fetchImpl,
+  })
+
+  await plugin['chat.message'](
+    { sessionID: 'ses_bad_payload' },
+    { parts: [{ type: 'text', text: 'what did we decide earlier about git commit behavior' }] },
+  )
+
+  const output = { system: [] }
+  await plugin['experimental.chat.system.transform']({ sessionID: 'ses_bad_payload' }, output)
+
+  assert.deepEqual(output.system, [])
+  assert.ok(logs.some((entry) => entry.message === 'EvoMemory flush returned unexpected payload'))
+  assert.ok(logs.some((entry) => entry.message === 'EvoMemory search returned unexpected payload'))
+})
+
+test('tracks checkpoint index from the acknowledged message id', async () => {
+  const flushBodies = []
+  let messageVersion = 0
+
+  const fetchImpl = async (url, options = {}) => {
+    if (String(url).endsWith('/health')) {
+      return jsonResponse({ ok: true })
+    }
+
+    if (String(url).endsWith('/internal/session/flush')) {
+      flushBodies.push(JSON.parse(options.body))
+      return jsonResponse({ last_saved_message_id: 'msg_002' })
+    }
+
+    if (String(url).endsWith('/internal/context/search')) {
+      return jsonResponse({ wing: 'opencode', results: [] })
+    }
+
+    throw new Error(`unexpected url: ${url}`)
+  }
+
+  const plugin = await EvomemoryOpencodePlugin({
+    client: {
+      app: { log: async () => {} },
+      session: {
+        messages: async () => {
+          messageVersion += 1
+          if (messageVersion === 1) {
+            return {
+              data: [
+                { info: { id: 'msg_001', role: 'user' }, parts: [{ type: 'text', text: 'first' }] },
+                { info: { id: 'msg_002', role: 'assistant' }, parts: [{ type: 'text', text: 'second' }] },
+                { info: { id: 'msg_003', role: 'user' }, parts: [{ type: 'text', text: 'third' }] },
+              ],
+            }
+          }
+          return {
+            data: [
+              { info: { id: 'msg_001', role: 'user' }, parts: [{ type: 'text', text: 'first' }] },
+              { info: { id: 'msg_002', role: 'assistant' }, parts: [{ type: 'text', text: 'second' }] },
+              { info: { id: 'msg_003', role: 'user' }, parts: [{ type: 'text', text: 'third' }] },
+              { info: { id: 'msg_004', role: 'assistant' }, parts: [{ type: 'text', text: 'fourth' }] },
+            ],
+          }
+        },
+      },
+    },
+    directory: '/home/mechrevo/.config/opencode',
+    worktree: '/home/mechrevo/.config/opencode',
+    configOverride: {
+      bridgeBaseUrl: 'http://127.0.0.1:8876',
+    },
+    fetchImpl,
+  })
+
+  await plugin['chat.message'](
+    { sessionID: 'ses_checkpoint' },
+    { parts: [{ type: 'text', text: 'what did we decide earlier about git commit behavior' }] },
+  )
+  await plugin['chat.message'](
+    { sessionID: 'ses_checkpoint' },
+    { parts: [{ type: 'text', text: 'what did we decide earlier about test execution behavior' }] },
+  )
+
+  assert.equal(flushBodies.length, 2)
+  assert.deepEqual(
+    flushBodies[1].messages.map((message) => message.info.id),
+    ['msg_003', 'msg_004'],
+  )
+})
+
+test('logs successful flush/search details and reuses cached bridge health within one message', async () => {
+  const logs = []
+  const calls = []
+
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url: String(url), options })
+    if (String(url).endsWith('/health')) {
+      return jsonResponse({ ok: true })
+    }
+    if (String(url).endsWith('/internal/session/flush')) {
+      return jsonResponse({ last_saved_message_id: 'msg_log_001' })
+    }
+    if (String(url).endsWith('/internal/context/search')) {
+      return jsonResponse({
+        wing: 'opencode',
+        core_memory: [
+          {
+            memory_tier: 'project_memory',
+            memory_key: 'git_commit_behavior',
+            memory_value: 'disabled',
+            source_file: 'session:ses_log',
+          },
+        ],
+        results: [],
+      })
+    }
+
+    throw new Error(`unexpected url: ${url}`)
+  }
+
+  const plugin = await EvomemoryOpencodePlugin({
+    client: {
+      app: { log: async (entry) => logs.push(entry.body) },
+      session: {
+        messages: async () => ({
+          data: [
+            { info: { id: 'msg_log_001', role: 'user' }, parts: [{ type: 'text', text: 'remember this state' }] },
+          ],
+        }),
+      },
+    },
+    directory: '/home/mechrevo/.config/opencode',
+    worktree: '/home/mechrevo/.config/opencode',
+    configOverride: {
+      bridgeBaseUrl: 'http://127.0.0.1:8878',
+    },
+    fetchImpl,
+  })
+
+  await plugin['chat.message'](
+    { sessionID: 'ses_log' },
+    { parts: [{ type: 'text', text: 'what did we decide earlier about git commit behavior' }] },
+  )
+
+  assert.equal(calls.filter((entry) => entry.url.endsWith('/health')).length, 1)
+  assert.ok(logs.some((entry) => entry.message === 'EvoMemory session flush completed'))
+  assert.ok(logs.some((entry) => entry.message === 'EvoMemory context search completed'))
+  assert.ok(logs.some((entry) => entry.message === 'EvoMemory bridge is healthy'))
+})
+
 test('runs maintenance after compaction when enabled', async () => {
   const calls = []
 

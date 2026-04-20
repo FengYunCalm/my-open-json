@@ -8,10 +8,11 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 import {
+  SKILL_HINTS as SKILL_HINT_ENTRIES,
   buildTaskRouting,
   collectText,
   findGuardedBashCommand,
-  shouldInject,
+  getInjectionSkipReason,
 } from "./tool-forced-eval.helpers.mjs";
 
 const MARKER = "<OPENCODE_TOOL_FORCED_EVAL>";
@@ -92,12 +93,9 @@ const TOOL_DESCRIPTION_HINTS = [
   },
 ];
 
-const SKILL_HINTS = {
-  "writing-plans": "Write or refine a concrete implementation plan before editing.",
-  "systematic-debugging": "Reproduce, isolate, and verify a bug fix instead of guessing.",
-  "agent-code-reviewer": "Review for bugs, regressions, and missing tests.",
-  "agent-test-runner": "Run and analyze the relevant tests.",
-};
+const SKILL_HINTS = Object.fromEntries(
+  SKILL_HINT_ENTRIES.map(({ name, reason }) => [name, reason]),
+);
 
 const BASH_GUARDRAIL_MESSAGES = {
   grep: "Use the dedicated `grep` tool for repository content search instead of shell `grep`.",
@@ -176,20 +174,84 @@ function stripJsonComments(raw) {
 }
 
 function readConfigFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return { data: null, error: null };
+  }
+
   try {
     const raw = fs.readFileSync(filePath, "utf8");
-    return JSON.parse(stripJsonComments(raw));
-  } catch {
-    return null;
+    return {
+      data: JSON.parse(stripJsonComments(raw)),
+      error: null,
+    };
+  } catch (error) {
+    return {
+      data: null,
+      error,
+    };
   }
 }
 
-function loadPluginConfig(overrides = {}) {
-  const localConfig = readConfigFile(PLUGIN_CONFIG_PATH);
+function normalizeInteger(value, fallback, minimum = 0) {
+  if (!Number.isInteger(value) || value < minimum) return fallback;
+  return value;
+}
+
+function normalizeBoolean(value, fallback) {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function normalizeGuardedBashCommands(value, fallback) {
+  if (!Array.isArray(value)) return fallback;
+  return value
+    .map((item) => (typeof item === "string" ? item.trim().toLowerCase() : ""))
+    .filter(Boolean);
+}
+
+function normalizeConfig(config = {}) {
   return {
-    ...DEFAULT_CONFIG,
-    ...(localConfig && typeof localConfig === "object" ? localConfig : {}),
-    ...(overrides && typeof overrides === "object" ? overrides : {}),
+    skillReuseTtl: normalizeInteger(config.skillReuseTtl, DEFAULT_CONFIG.skillReuseTtl),
+    shortlistLimit: normalizeInteger(config.shortlistLimit, DEFAULT_CONFIG.shortlistLimit),
+    maxReusableSkillsInPrompt: normalizeInteger(
+      config.maxReusableSkillsInPrompt,
+      DEFAULT_CONFIG.maxReusableSkillsInPrompt,
+    ),
+    emphasizeEvomemory: normalizeBoolean(
+      config.emphasizeEvomemory,
+      DEFAULT_CONFIG.emphasizeEvomemory,
+    ),
+    includeVisibleMcpAppendixByDefault: normalizeBoolean(
+      config.includeVisibleMcpAppendixByDefault,
+      DEFAULT_CONFIG.includeVisibleMcpAppendixByDefault,
+    ),
+    includeVisibleMcpAppendixOnUnclearIntent: normalizeBoolean(
+      config.includeVisibleMcpAppendixOnUnclearIntent,
+      DEFAULT_CONFIG.includeVisibleMcpAppendixOnUnclearIntent,
+    ),
+    enableBashGuardrails: normalizeBoolean(
+      config.enableBashGuardrails,
+      DEFAULT_CONFIG.enableBashGuardrails,
+    ),
+    bashGuardrailMode:
+      config.bashGuardrailMode === "error"
+        ? "error"
+        : DEFAULT_CONFIG.bashGuardrailMode,
+    guardedBashCommands: normalizeGuardedBashCommands(
+      config.guardedBashCommands,
+      DEFAULT_CONFIG.guardedBashCommands,
+    ),
+  };
+}
+
+function loadPluginConfig(overrides = {}, reportIssue = () => {}) {
+  const localConfig = readConfigFile(PLUGIN_CONFIG_PATH);
+  if (localConfig.error) reportIssue(PLUGIN_CONFIG_PATH, localConfig.error);
+  return {
+    ...normalizeConfig({
+      ...DEFAULT_CONFIG,
+      ...(localConfig.data && typeof localConfig.data === "object" ? localConfig.data : {}),
+      ...(overrides && typeof overrides === "object" ? overrides : {}),
+    }),
   };
 }
 
@@ -202,14 +264,18 @@ function uniqueConfigPaths(directory, worktree) {
   );
 }
 
-function loadVisibleMcpConfigs(directory, worktree) {
+function loadVisibleMcpConfigs(directory, worktree, reportIssue = () => {}) {
   const merged = {};
 
   for (const filePath of uniqueConfigPaths(directory, worktree)) {
     const parsed = readConfigFile(filePath);
-    if (!parsed || typeof parsed !== "object" || !parsed.mcp || typeof parsed.mcp !== "object") continue;
+    if (parsed.error) {
+      reportIssue(filePath, parsed.error);
+      continue;
+    }
+    if (!parsed.data || typeof parsed.data !== "object" || !parsed.data.mcp || typeof parsed.data.mcp !== "object") continue;
 
-    for (const [name, entryConfig] of Object.entries(parsed.mcp)) {
+    for (const [name, entryConfig] of Object.entries(parsed.data.mcp)) {
       merged[name] = entryConfig;
     }
   }
@@ -245,6 +311,30 @@ function getSessionState(sessionStates, sessionID) {
   }
 
   return state;
+}
+
+function clearInstruction(state) {
+  state.instruction = null;
+}
+
+function resetForCompaction(state) {
+  state.generation += 1;
+  clearInstruction(state);
+}
+
+function setInstructionForTurn(state, instruction) {
+  state.instruction = instruction;
+}
+
+function recordSkillLoad(state, skillName) {
+  state.loadedSkills.set(skillName, {
+    loadedAtTurn: state.turn,
+    generation: state.generation,
+  });
+}
+
+function getBashCommand(input, output) {
+  return String(input?.args?.command ?? output?.args?.command ?? "");
 }
 
 function getReusableSkills(state, config) {
@@ -369,8 +459,27 @@ function buildGuardrailError(guardedCommand) {
 }
 
 export const ToolForcedEvalPlugin = async ({ client, directory, worktree, configOverrides } = {}) => {
-  const config = loadPluginConfig(configOverrides);
-  const visibleMcpNames = loadVisibleMcpConfigs(directory, worktree);
+  const reportedConfigIssues = new Set();
+  const reportConfigIssue = (filePath, error) => {
+    if (!error) return;
+    const key = `${filePath}:${error.name}:${error.message}`;
+    if (reportedConfigIssues.has(key)) return;
+    reportedConfigIssues.add(key);
+    client?.app?.log?.({
+      body: {
+        service: "tool-forced-eval",
+        level: "warn",
+        message: "Failed to read config file",
+        extra: {
+          filePath,
+          error: String(error),
+        },
+      },
+    }).catch(() => {});
+  };
+
+  const config = loadPluginConfig(configOverrides, reportConfigIssue);
+  const visibleMcpNames = loadVisibleMcpConfigs(directory, worktree, reportConfigIssue);
   const sessionStates = new Map();
 
   await client?.app?.log?.({
@@ -400,8 +509,7 @@ export const ToolForcedEvalPlugin = async ({ client, directory, worktree, config
       if (!sessionID) return;
 
       const state = getSessionState(sessionStates, sessionID);
-      state.generation += 1;
-      state.instruction = null;
+      resetForCompaction(state);
     },
 
     "chat.message": async ({ sessionID }, output) => {
@@ -409,25 +517,41 @@ export const ToolForcedEvalPlugin = async ({ client, directory, worktree, config
       if (!sessionID) return;
 
       const state = getSessionState(sessionStates, sessionID);
-      if (!shouldInject(userText)) {
-        state.instruction = null;
+      const skipReason = getInjectionSkipReason(userText);
+      if (skipReason) {
+        clearInstruction(state);
+        await client?.app?.log?.({
+          body: {
+            service: "tool-forced-eval",
+            level: "debug",
+            message: "Skipped task routing guidance",
+            extra: {
+              sessionID,
+              skipReason,
+            },
+          },
+        }).catch(() => {});
         return;
       }
 
       state.turn += 1;
-      const currentVisibleMcpNames = loadVisibleMcpConfigs(directory, worktree);
+      const currentVisibleMcpNames = loadVisibleMcpConfigs(
+        directory,
+        worktree,
+        reportConfigIssue,
+      );
       const reusableSkills = getReusableSkills(state, config);
       const routing = buildTaskRouting(userText, currentVisibleMcpNames, config);
       const includeVisibleMcpAppendix = config.includeVisibleMcpAppendixByDefault
         || (!routing.intent.clear && config.includeVisibleMcpAppendixOnUnclearIntent);
 
-      state.instruction = buildInstruction({
+      setInstructionForTurn(state, buildInstruction({
         mcpNames: currentVisibleMcpNames,
         reusableSkills,
         routing,
         includeVisibleMcpAppendix,
         config,
-      });
+      }));
 
       await client?.app?.log?.({
         body: {
@@ -471,7 +595,10 @@ export const ToolForcedEvalPlugin = async ({ client, directory, worktree, config
       if (input.tool !== "bash") return;
       if (config.bashGuardrailMode !== "error") return;
 
-      const guardedCommand = findGuardedBashCommand(String(output.args?.command ?? ""), config.guardedBashCommands);
+      const guardedCommand = findGuardedBashCommand(
+        getBashCommand(input, output),
+        config.guardedBashCommands,
+      );
       if (!guardedCommand) return;
 
       await client?.app?.log?.({
@@ -497,10 +624,7 @@ export const ToolForcedEvalPlugin = async ({ client, directory, worktree, config
       if (!sessionID || !skillName) return;
 
       const state = getSessionState(sessionStates, sessionID);
-      state.loadedSkills.set(skillName, {
-        loadedAtTurn: state.turn,
-        generation: state.generation,
-      });
+      recordSkillLoad(state, skillName);
     },
 
     "tool.definition": async ({ toolID }, output) => {

@@ -36,7 +36,7 @@ async function defaultLog(client, level, message, extra = undefined) {
   }).catch(() => {})
 }
 
-async function cachedHealthcheck(config, dependencies = {}, options = {}) {
+async function healthcheckStatus(config, dependencies = {}, options = {}) {
   const fetchImpl = getFetchImpl(dependencies.fetchImpl)
   const now = getNow(dependencies.now)
   const baseUrl = config.bridgeBaseUrl
@@ -45,7 +45,7 @@ async function cachedHealthcheck(config, dependencies = {}, options = {}) {
   const cached = healthCache.get(baseUrl)
 
   if (!force && ttlMs > 0 && cached && cached.expiresAt > now()) {
-    return cached.ok
+    return { ok: cached.ok, source: 'cache' }
   }
 
   let ok = false
@@ -65,7 +65,12 @@ async function cachedHealthcheck(config, dependencies = {}, options = {}) {
     healthCache.delete(baseUrl)
   }
 
-  return ok
+  return { ok, source: force ? 'probe' : 'probe' }
+}
+
+async function cachedHealthcheck(config, dependencies = {}, options = {}) {
+  const status = await healthcheckStatus(config, dependencies, options)
+  return status.ok
 }
 
 export async function bridgeStatus(config, dependencies = {}) {
@@ -84,6 +89,9 @@ export async function waitForBridge(config, dependencies = {}) {
 async function startManagedBridge(config, client, dependencies = {}) {
   if (!Array.isArray(config.ensureBridgeCommand) || !config.ensureBridgeCommand.length) return
   const logImpl = dependencies.logImpl ?? defaultLog
+  await logImpl(client, 'debug', 'Attempting EvoMemory managed bridge startup', {
+    command: config.ensureBridgeCommand,
+  })
 
   try {
     const spawnImpl = getSpawnImpl(dependencies.spawnImpl)
@@ -102,9 +110,12 @@ async function startManagedBridge(config, client, dependencies = {}) {
 }
 
 async function startDirectBridge(config, client, dependencies = {}) {
-  const launch = buildDirectBridgeLaunch(config)
+  const launch = buildDirectBridgeLaunch(config, dependencies.env ?? process.env)
   if (!launch) return false
   const logImpl = dependencies.logImpl ?? defaultLog
+  await logImpl(client, 'debug', 'Attempting EvoMemory direct bridge fallback', {
+    command: launch.cmd,
+  })
 
   try {
     const spawnImpl = getSpawnImpl(dependencies.spawnImpl)
@@ -126,12 +137,44 @@ async function startDirectBridge(config, client, dependencies = {}) {
 }
 
 export async function ensureBridge(config, client, dependencies = {}) {
-  if (await cachedHealthcheck(config, dependencies, { force: true })) return true
-  await startManagedBridge(config, client, dependencies)
-  if (await waitForBridge(config, dependencies)) return true
-  const startedDirectly = await startDirectBridge(config, client, dependencies)
-  if (startedDirectly && (await waitForBridge(config, dependencies))) return true
   const logImpl = dependencies.logImpl ?? defaultLog
+  const initialStatus = await healthcheckStatus(config, dependencies)
+  if (initialStatus.ok) {
+    await logImpl(client, 'debug', 'EvoMemory bridge is healthy', {
+      source: initialStatus.source,
+    })
+    return true
+  }
+  if (initialStatus.source !== 'cache') {
+    await logImpl(client, 'debug', 'EvoMemory bridge health probe failed', {
+      source: initialStatus.source,
+    })
+  }
+
+  if (initialStatus.source === 'cache') {
+    const forcedStatus = await healthcheckStatus(config, dependencies, { force: true })
+    if (forcedStatus.ok) {
+      await logImpl(client, 'debug', 'EvoMemory bridge is healthy', {
+        source: forcedStatus.source,
+      })
+      return true
+    }
+  }
+
+  await startManagedBridge(config, client, dependencies)
+  if (await waitForBridge(config, dependencies)) {
+    await logImpl(client, 'debug', 'EvoMemory bridge is healthy', {
+      source: 'managed-start',
+    })
+    return true
+  }
+  const startedDirectly = await startDirectBridge(config, client, dependencies)
+  if (startedDirectly && (await waitForBridge(config, dependencies))) {
+    await logImpl(client, 'debug', 'EvoMemory bridge is healthy', {
+      source: 'direct-fallback',
+    })
+    return true
+  }
   await logImpl(client, 'warn', 'EvoMemory bridge is unavailable after startup attempt')
   return false
 }
