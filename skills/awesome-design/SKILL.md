@@ -22,14 +22,18 @@ This skill helps map a visual request to a concrete reference from the awesome-d
 - `references/upstream/README.md`: authoritative upstream collection index and category source
 - `references/upstream/design-md/<slug>/README.md`: per-site local stub that confirms the target design URL
 
-## When to Use This Skill
+## When to Use
 
 Use this skill when the user:
 - names a brand or site style directly, such as `like Vercel`, `use a Claude-like look`, or `make it feel like Notion`
 - describes a vibe and wants you to pick a fitting design reference, such as `warm editorial`, `dark developer-tool aesthetic`, or `monochrome minimal`
 - wants design inspiration or a style source before implementing or restyling a frontend surface
 
-Do not use it for generic UI implementation when no reference selection is needed. Once a reference has been chosen, continue the work and preserve the host project's existing design language unless the user explicitly asked for a stronger restyle.
+## Boundaries
+
+- Do not use for generic UI implementation when no reference selection is needed.
+- Once a reference has been chosen, continue the work and preserve the host project's existing design language unless the user explicitly asked for a stronger restyle.
+- Do not use for fixed brand-compliance work where the brand system is already known.
 
 ## Workflow
 

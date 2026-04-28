@@ -7,7 +7,7 @@ description: Helps users discover and install agent skills when they ask questio
 
 This skill helps you discover and install skills from the open agent skills ecosystem.
 
-## When to Use This Skill
+## When to Use
 
 Use this skill when the user:
 
@@ -17,6 +17,11 @@ Use this skill when the user:
 - Expresses interest in extending agent capabilities
 - Wants to search for tools, templates, or workflows
 - Mentions they wish they had help with a specific domain (design, testing, deployment, etc.)
+
+## Boundaries
+
+- Do not use when an already installed local skill clearly fits and the task is ready to execute.
+- Do not use for ordinary code search, plugin tuning, or MCP configuration tasks.
 
 ## What is the Skills CLI?
 

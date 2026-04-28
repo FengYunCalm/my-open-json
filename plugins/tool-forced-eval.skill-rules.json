@@ -1,0 +1,588 @@
+{
+  "code-locator": {
+    "patterns": [
+      "谁调用.*(函数|方法|接口)",
+      "(函数|方法|接口).*(谁调用|调用方)",
+      "调用链",
+      "call site",
+      "who calls",
+      "definition.*where",
+      "定位.*(实现|定义)"
+    ],
+    "keywords": [
+      "谁调用",
+      "调用方",
+      "调用链",
+      "入口点",
+      "定义在哪",
+      "定位实现",
+      "call site",
+      "who calls",
+      "entry point"
+    ],
+    "boost": 1
+  },
+  "project-init": {
+    "patterns": [
+      "熟悉.*项目",
+      "先.*看.*项目",
+      "先.*了解.*代码库",
+      "项目摸底",
+      "陌生项目"
+    ],
+    "keywords": [
+      "先熟悉一下这个项目",
+      "熟悉一下这个项目",
+      "项目摸底",
+      "帮我先看下这个项目",
+      "先了解这个代码库",
+      "陌生项目"
+    ],
+    "boost": 1
+  },
+  "writing-plans": {
+    "patterns": [
+      "实施方案",
+      "实现计划",
+      "任务拆解",
+      "技术方案",
+      "implementation plan",
+      "task breakdown"
+    ],
+    "keywords": [
+      "实施方案",
+      "实现计划",
+      "任务拆解",
+      "技术方案",
+      "implementation plan",
+      "task breakdown"
+    ],
+    "boost": 1.25
+  },
+  "find-skills": {
+    "patterns": [
+      "有没有合适的 skill",
+      "找.*skill.*处理",
+      "find a skill",
+      "find skills",
+      "discover skills",
+      "技能推荐"
+    ],
+    "keywords": [
+      "有没有合适的 skill",
+      "找 skill",
+      "find a skill",
+      "discover skills",
+      "技能推荐"
+    ],
+    "boost": 1
+  },
+  "systematic-debugging": {
+    "patterns": [
+      "根因",
+      "线上问题",
+      "怎么排查",
+      "问题排查",
+      "故障排查",
+      "root cause"
+    ],
+    "keywords": [
+      "根因",
+      "线上问题",
+      "怎么排查",
+      "问题排查",
+      "故障排查",
+      "root cause"
+    ],
+    "boost": 1.5
+  },
+  "internal-comms": {
+    "patterns": [
+      "(内部)?周报",
+      "(内部)?日报",
+      "(内部)?月报",
+      "领导汇报",
+      "status report",
+      "leadership update",
+      "incident report",
+      "newsletter"
+    ],
+    "keywords": [
+      "内部周报",
+      "周报",
+      "日报",
+      "月报",
+      "简报",
+      "领导汇报",
+      "status report",
+      "leadership update",
+      "newsletter",
+      "incident report",
+      "项目更新"
+    ],
+    "boost": 1
+  },
+  "doc-coauthoring": {
+    "patterns": [
+      "rfc",
+      "决策文档",
+      "提案文档",
+      "技术方案文档",
+      "共写.*文档",
+      "co-author"
+    ],
+    "keywords": [
+      "rfc",
+      "决策文档",
+      "提案文档",
+      "技术方案文档",
+      "共写文档"
+    ],
+    "boost": 1.5
+  },
+  "contract-testing-builder": {
+    "patterns": [
+      "contract testing",
+      "api contract",
+      "consumer[- ]driven",
+      "pact",
+      "契约测试",
+      "契约验证"
+    ],
+    "keywords": [
+      "contract testing",
+      "api contract",
+      "consumer-driven",
+      "consumer driven",
+      "pact",
+      "契约测试",
+      "契约验证"
+    ],
+    "boost": 1.5
+  },
+  "android-testing": {
+    "patterns": [
+      "android.*测试",
+      "截图测试",
+      "screenshot testing",
+      "hilt.*测试",
+      "compose.*测试",
+      "jetpack compose.*测试"
+    ],
+    "keywords": [
+      "android 测试",
+      "截图测试",
+      "screenshot testing",
+      "hilt 测试",
+      "compose 测试"
+    ],
+    "boost": 1.5
+  },
+  "compose-ui": {
+    "patterns": [
+      "jetpack compose",
+      "composable",
+      "compose 页面",
+      "compose ui",
+      "compose.*列表",
+      "compose.*卡顿",
+      "compose.*性能",
+      "jetpack compose.*重构"
+    ],
+    "keywords": [
+      "jetpack compose",
+      "composable",
+      "compose 页面",
+      "compose ui",
+      "compose 列表",
+      "compose 卡顿",
+      "compose 性能"
+    ],
+    "boost": 1.25
+  },
+  "frontend-design": {
+    "patterns": [
+      "更有设计感",
+      "页面改版",
+      "重做.*页面",
+      "前端改版",
+      "ui 改版",
+      "landing page"
+    ],
+    "keywords": [
+      "更有设计感",
+      "页面改版",
+      "前端改版",
+      "ui 改版",
+      "landing page"
+    ],
+    "boost": 1.25
+  },
+  "algorithmic-art": {
+    "patterns": [
+      "p5\\.js",
+      "生成艺术",
+      "algorithmic art",
+      "flow field",
+      "particle system",
+      "粒子系统"
+    ],
+    "keywords": [
+      "p5.js",
+      "生成艺术",
+      "algorithmic art",
+      "flow field",
+      "particle system",
+      "粒子系统"
+    ],
+    "boost": 1.5
+  },
+  "awesome-design": {
+    "patterns": [
+      "像 .* 一样",
+      "参考 .* 风格",
+      "参考设计风格",
+      "找一个参考设计风格",
+      "像 linear 一样",
+      "像 stripe 一样",
+      "像 notion 一样"
+    ],
+    "keywords": [
+      "像 Linear 一样",
+      "参考风格",
+      "参考设计风格",
+      "品牌风格参考"
+    ],
+    "boost": 1.5
+  },
+  "slack-gif-creator": {
+    "patterns": [
+      "slack gif",
+      "slack emoji",
+      "gif",
+      "动图",
+      "表情包"
+    ],
+    "keywords": [
+      "slack gif",
+      "slack emoji",
+      "动图",
+      "表情包"
+    ],
+    "boost": 1
+  },
+  "mcp-builder": {
+    "patterns": [
+      "mcp server",
+      "mcp 服务",
+      "mcp 工具",
+      "tool surface",
+      "工具面",
+      "transport"
+    ],
+    "keywords": [
+      "mcp server",
+      "mcp 服务",
+      "mcp 工具",
+      "tool surface",
+      "工具面"
+    ],
+    "boost": 1.5
+  },
+  "canvas-design": {
+    "patterns": [
+      "海报",
+      "封面",
+      "主视觉",
+      "宣传图",
+      "png.*设计",
+      "pdf.*设计"
+    ],
+    "keywords": [
+      "海报",
+      "封面",
+      "主视觉",
+      "宣传图",
+      "静态设计",
+      "png 设计",
+      "pdf 设计"
+    ],
+    "boost": 1
+  },
+  "theme-factory": {
+    "patterns": [
+      "套.*主题",
+      "换.*主题",
+      "主题化",
+      "统一.*视觉.*风格",
+      "主题风格"
+    ],
+    "keywords": [
+      "套一个主题",
+      "换个主题",
+      "做一个主题",
+      "主题风格",
+      "主题化",
+      "统一视觉主题"
+    ],
+    "boost": 1
+  },
+  "verification-before-completion": {
+    "patterns": [
+      "完成前.*验证",
+      "结束前.*验证",
+      "再验证一遍",
+      "关闭前检查",
+      "report success"
+    ],
+    "keywords": [
+      "完成前验证",
+      "结束前验证",
+      "再验证一遍",
+      "关闭前检查"
+    ],
+    "boost": 1.25
+  },
+  "testing-regression": {
+    "patterns": [
+      "回归检查",
+      "回归验证",
+      "一轮回归",
+      "发布前.*回归",
+      "regression check",
+      "regression pass"
+    ],
+    "keywords": [
+      "回归检查",
+      "回归验证",
+      "一轮回归",
+      "发布前回归",
+      "regression check"
+    ],
+    "boost": 1.5
+  },
+  "web-artifacts-builder": {
+    "patterns": [
+      "html artifact",
+      "复杂交互",
+      "交互式 html",
+      "复杂 html 页面",
+      "artifact"
+    ],
+    "keywords": [
+      "html artifact",
+      "复杂交互",
+      "artifact",
+      "交互式 html",
+      "复杂 html 页面",
+      "shadcn artifact"
+    ],
+    "boost": 1
+  },
+  "ui-ux-pro-max": {
+    "patterns": [
+      "saas 仪表盘",
+      "dashboard ui/ux",
+      "管理后台 ui/ux",
+      "仪表盘 ui",
+      "ui/ux 方案"
+    ],
+    "keywords": [
+      "SaaS 仪表盘",
+      "dashboard ui/ux",
+      "管理后台 ui/ux",
+      "仪表盘 ui",
+      "ui/ux 方案"
+    ],
+    "boost": 1.5
+  },
+  "brand-guidelines": {
+    "patterns": [
+      "anthropic.*品牌",
+      "anthropic.*官方风格",
+      "anthropic.*风格",
+      "品牌规范",
+      "品牌色",
+      "字体规范",
+      "官方品牌"
+    ],
+    "keywords": [
+      "anthropic",
+      "Anthropic 官方风格",
+      "Anthropic 风格",
+      "品牌规范",
+      "品牌色",
+      "字体规范",
+      "官方品牌"
+    ],
+    "boost": 1
+  },
+  "finishing-a-development-branch": {
+    "patterns": [
+      "分支.*(做完|完成).*(开\\s*pr|保留|合并)",
+      "分支.*要不要.*(留着|保留|提\\s*pr|开\\s*pr)",
+      "提\\s*pr.*还是.*(留着|保留)",
+      "开\\s*pr.*还是.*保留",
+      "merge.*keep.*branch"
+    ],
+    "keywords": [
+      "分支做完",
+      "分支完成",
+      "分支要不要留着",
+      "提PR还是保留",
+      "下一步怎么办",
+      "开 pr",
+      "开pr",
+      "merge or keep branch"
+    ],
+    "boost": 1
+  },
+  "golang-testing": {
+    "patterns": [
+      "go.*测试",
+      "golang.*测试",
+      "testify",
+      "table-driven"
+    ],
+    "keywords": [
+      "go 测试",
+      "golang 测试",
+      "testify",
+      "table-driven"
+    ],
+    "boost": 1.25
+  },
+  "webapp-testing": {
+    "patterns": [
+      "playwright",
+      "浏览器级测试",
+      "浏览器日志",
+      "页面截图",
+      "页面问题",
+      "web app 测试"
+    ],
+    "keywords": [
+      "playwright",
+      "浏览器级测试",
+      "浏览器日志",
+      "页面截图",
+      "页面问题"
+    ],
+    "boost": 4
+  },
+  "gds-testing": {
+    "patterns": [
+      "游戏测试计划",
+      "玩法测试",
+      "game testing",
+      "playtest",
+      "游戏回归"
+    ],
+    "keywords": [
+      "游戏测试计划",
+      "玩法测试",
+      "game testing",
+      "playtest",
+      "游戏回归"
+    ],
+    "boost": 1.5
+  },
+  "receiving-code-review": {
+    "patterns": [
+      "review 反馈",
+      "代码 review 反馈",
+      "收到.*review.*反馈",
+      "收到代码审查反馈",
+      "要不要改"
+    ],
+    "keywords": [
+      "review 反馈",
+      "代码 review 反馈",
+      "收到 review 反馈",
+      "要不要改"
+    ],
+    "boost": 1.5
+  },
+  "ai-player": {
+    "patterns": [
+      "侠客行",
+      "xiakexing",
+      "跑.*侠客行.*回归",
+      "侠客行.*回归",
+      "游戏命令"
+    ],
+    "keywords": [
+      "侠客行",
+      "XiaKeXing",
+      "侠客行回归",
+      "游戏命令"
+    ],
+    "boost": 2
+  },
+  "relay-room": {
+    "patterns": [
+      "relay.*房间",
+      "协作房间",
+      "导出.*聊天记录",
+      "导出.*转录",
+      "创建.*relay.*房间",
+      "加入.*relay.*房间",
+      "导出.*relay.*转录",
+      "relay room",
+      "relay thread"
+    ],
+    "keywords": [
+      "relay 房间",
+      "协作房间",
+      "聊天记录导出",
+      "relay thread",
+      "relay room",
+      "转录导出"
+    ],
+    "boost": 1
+  },
+  "team-core": {
+    "patterns": [
+      "多代理.*workflow team",
+      "多代理协作团队",
+      "协作团队",
+      "启动.*workflow team",
+      "管理.*workflow team",
+      "relay-backed team"
+    ],
+    "keywords": [
+      "多代理 workflow team",
+      "多代理协作团队",
+      "协作团队",
+      "workflow team",
+      "relay-backed team"
+    ],
+    "boost": 1
+  },
+  "using-git-worktrees": {
+    "patterns": [
+      "git worktree",
+      "隔离工作区",
+      "worktree"
+    ],
+    "keywords": [
+      "git worktree",
+      "隔离工作区",
+      "worktree"
+    ]
+  },
+  "graphify": {
+    "patterns": [
+      "/graphify",
+      "graphify",
+      "知识图谱",
+      "代码图谱"
+    ],
+    "keywords": [
+      "/graphify",
+      "graphify",
+      "知识图谱",
+      "代码图谱"
+    ]
+  }
+}

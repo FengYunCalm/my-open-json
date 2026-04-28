@@ -10,6 +10,19 @@ license: Complete terms in LICENSE.txt
 
 Create MCP (Model Context Protocol) servers that enable LLMs to interact with external services through well-designed tools. The quality of an MCP server is measured by how well it enables LLMs to accomplish real-world tasks.
 
+## When to Use
+
+Use when the user:
+- wants to build a new MCP server
+- wants to redesign an existing MCP server or tool surface
+- needs help choosing MCP transport, SDK, tool boundaries, or API coverage strategy
+- is integrating an external API or service into an MCP workflow
+
+## Boundaries
+
+- Do not use for ordinary plugin tuning or local config changes when no MCP server implementation work is involved.
+- Do not use when the task is only about consuming an MCP server rather than building one.
+
 ---
 
 # Process

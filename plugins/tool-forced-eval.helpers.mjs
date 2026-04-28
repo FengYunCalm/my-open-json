@@ -1,3 +1,6 @@
+import { rankSkillRecommendations } from "./tool-forced-eval.skills.mjs";
+import { rankMcpRecommendations } from "./tool-forced-eval.mcp.mjs";
+
 const SMALL_TALK_PATTERNS = [
   /^hi$/i,
   /^hello$/i,
@@ -82,29 +85,6 @@ const LOCAL_SYSTEM_HINTS = [
 const REASONING_HINTS = [
   /\b(plan|design|architecture|tradeoff|compare|reason|why|debug|review|refactor)\b/i,
   /(方案|设计|架构|取舍|比较|为什么|排查|审查|重构)/,
-]
-
-export const SKILL_HINTS = [
-  {
-    name: 'writing-plans',
-    reason: 'Write or refine a concrete implementation plan before editing.',
-    patterns: [/\b(plan|implementation plan|task breakdown)\b/i, /(方案|计划|任务拆解|实施步骤)/],
-  },
-  {
-    name: 'systematic-debugging',
-    reason: 'Reproduce, isolate, and verify a bug fix instead of guessing.',
-    patterns: [/\b(debug|bug|root cause|reproduce|failure|failing)\b/i, /(排查|报错|异常|故障|复现|根因)/],
-  },
-  {
-    name: 'agent-code-reviewer',
-    reason: 'Review changes for bugs, regressions, and missing tests.',
-    patterns: [/\b(review|code review)\b/i, /(审查|代码检查|review)/],
-  },
-  {
-    name: 'agent-test-runner',
-    reason: 'Run and analyze the relevant tests.',
-    patterns: [/\b(run test|tests?|test suite)\b/i, /(测试|运行测试)/],
-  },
 ]
 
 const INTENT_LABELS = {
@@ -202,50 +182,55 @@ function dedupeByName(items = []) {
   return unique
 }
 
-export function detectSkillRecommendations(text = '', limit = 3) {
-  const matches = []
-  for (const skill of SKILL_HINTS) {
-    if (matchesAny(skill.patterns, text)) {
-      matches.push({ name: skill.name, reason: skill.reason })
-    }
-  }
-  return dedupeByName(matches).slice(0, limit)
+export function detectSkillRecommendations(text = '', limit = 3, catalog = [], intentKey = 'unclear') {
+  return dedupeByName(rankSkillRecommendations(text, catalog, { limit, intentKey }))
 }
 
 function buildNativeTool(name, reason) {
   return { name, reason }
 }
 
-function buildMcp(name, reason, visibleMcpNames) {
-  return visibleMcpNames.has(name) ? { name, reason } : null
+function normalizeMcpCatalog(entries = []) {
+  return entries
+    .map((entry) => {
+      if (typeof entry === 'string') {
+        return {
+          name: entry,
+          summary: 'specialized external tool capability',
+          reason: 'specialized external tool capability',
+          searchText: entry,
+        }
+      }
+
+      if (!entry || typeof entry !== 'object' || typeof entry.name !== 'string') return null
+      return entry
+    })
+    .filter(Boolean)
 }
 
-export function buildTaskRouting(text = '', visibleMcpNames = [], config = {}) {
+export function buildTaskRouting(text = '', visibleMcpCatalog = [], config = {}, skillCatalog = []) {
   const intent = classifyIntent(text)
-  const visible = new Set(visibleMcpNames)
+  const mcpCatalog = normalizeMcpCatalog(visibleMcpCatalog)
   const shortlistLimit = config.shortlistLimit ?? 3
+  const mcpShortlistLimit = 1
   const nativeTools = []
-  const mcps = []
-  const skills = detectSkillRecommendations(text, shortlistLimit)
+  const mcps = rankMcpRecommendations(text, mcpCatalog, { limit: mcpShortlistLimit, intentKey: intent.key })
+  const skills = detectSkillRecommendations(text, shortlistLimit, skillCatalog, intent.key)
 
   let summary = 'No single tool family is clearly dominant. Prefer the smallest correct tool or skill for the task.'
 
   switch (intent.key) {
     case 'memory-maintenance':
       summary = 'Use EvoMemory to inspect existing context and keep durable memory current as the task confirms, corrects, or reconciles prior state.'
-      mcps.push(buildMcp('evomemory', 'Use `evomemory_search_context` for relevant background, `evomemory_query_*` to inspect current beliefs/genes/capsules, and `evomemory_record_feedback` when you confirm or correct durable memory.', visible))
       break
     case 'history':
       summary = 'Prefer project memory for prior decisions and stable context, then read current code separately when implementation details matter.'
-      mcps.push(buildMcp('evomemory', 'Use `evomemory_search_context` early for prior decisions, preferences, governance constraints, or feedback history, and use `evomemory_record_feedback` when the task leaves behind durable corrections.', visible))
       break
     case 'docs':
       summary = 'Current library or framework docs are the source of truth for this task.'
-      mcps.push(buildMcp('context7', 'Use `context7_*` for current library or framework documentation and API examples.', visible))
       break
     case 'oss-patterns':
       summary = 'Look for public repository examples before reasoning from scratch.'
-      mcps.push(buildMcp('grep_app', 'Use `grep_app_*` to search public GitHub code for similar implementations or patterns.', visible))
       break
     case 'local-code':
       summary = 'Inspect the local codebase with native workspace tools before reaching for MCPs.'
@@ -256,12 +241,9 @@ export function buildTaskRouting(text = '', visibleMcpNames = [], config = {}) {
     case 'local-system':
       summary = 'Use local execution tools for commands, process inspection, or heavyweight local file analysis.'
       nativeTools.push(buildNativeTool('bash', 'Run direct local commands when dedicated read/search tools are not a better fit.'))
-      mcps.push(buildMcp('desktop_commander', 'Use `desktop_commander_*` for richer process control or heavyweight local file analysis.', visible))
       break
     case 'reasoning':
       summary = 'Use structured reasoning only when it materially helps a multi-step decision.'
-      mcps.push(buildMcp('thinking', 'Use `thinking_*` when the task benefits from explicit multi-step reasoning or revising conclusions.', visible))
-      mcps.push(buildMcp('evomemory', 'Use `evomemory_search_context` when prior project decisions or stale governance state may change the reasoning path.', visible))
       break
     default:
       nativeTools.push(buildNativeTool('glob', 'Find files by name when the task starts with repo exploration.'))
@@ -274,8 +256,8 @@ export function buildTaskRouting(text = '', visibleMcpNames = [], config = {}) {
     intent,
     summary,
     nativeTools: dedupeByName(nativeTools).slice(0, shortlistLimit),
-    mcps: dedupeByName(mcps.filter(Boolean)).slice(0, shortlistLimit),
-    skills: dedupeByName(skills).slice(0, shortlistLimit),
+    mcps: dedupeByName(mcps),
+    skills: dedupeByName(skills),
   }
 }
 

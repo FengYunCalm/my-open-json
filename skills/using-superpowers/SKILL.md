@@ -31,7 +31,7 @@ Follow instructions in this order:
 
 If project rules and a skill disagree, follow the project rules.
 
-## When a Skill Is Worth Loading
+## When to Use
 
 Load a skill when at least one of these is true:
 - the task matches a known workflow such as debugging, TDD, review, or planning
@@ -39,7 +39,7 @@ Load a skill when at least one of these is true:
 - the output format matters and a skill defines a reliable structure
 - the task is risky enough that a disciplined workflow reduces avoidable mistakes
 
-## When Not to Force It
+## Boundaries
 
 Skip extra skill loading when:
 - the task is trivial and no skill adds material value

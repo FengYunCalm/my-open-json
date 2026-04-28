@@ -1,0 +1,82 @@
+{
+  "xiakexing_ai": {
+    "description": "XiaKeXing gameplay automation, smoke checks, regression tests, and maintenance validation for the XiaKeXing repository.",
+    "summary": "Repo-specific XiaKeXing gameplay automation and regression tooling.",
+    "purpose": "Use for XiaKeXing gameplay control, regression verification, bug reproduction, and maintenance checks.",
+    "patterns": ["侠客行", "xiakexing", "跑.*侠客行.*回归", "侠客行.*回归"],
+    "keywords": ["侠客行", "XiaKeXing", "侠客行回归"],
+    "boost": 2
+  },
+  "relay": {
+    "description": "Relay rooms, threads, messages, and workflow-team coordination for multi-session collaboration.",
+    "summary": "Relay collaboration and workflow orchestration.",
+    "purpose": "Use for room, thread, transcript, and workflow-team operations when explicit collaboration state is required.",
+    "patterns": ["relay.*房间", "协作房间", "导出.*聊天记录", "导出.*转录", "relay room", "relay thread"],
+    "keywords": ["relay 房间", "协作房间", "聊天记录导出", "relay room"],
+    "boost": 1.5
+  },
+  "filesystem": {
+    "description": "Filesystem access outside the default workspace, including directory listing, file reads, writes, edits, and metadata inspection.",
+    "summary": "Extended filesystem access beyond the current workspace.",
+    "purpose": "Use when the task needs file operations in allowed directories that are outside the current workspace root.",
+    "patterns": ["工作区外", "工作区之外", "外部目录", "额外文件系统"],
+    "keywords": ["工作区外文件", "外部目录", "文件系统访问"],
+    "boost": 1
+  },
+  "memory": {
+    "description": "Structured long-term knowledge graph memory for creating, reading, updating, and deleting entities, relations, and observations.",
+    "summary": "Generic structured knowledge-graph memory.",
+    "purpose": "Use for explicit knowledge graph storage and retrieval when graph entities and relations matter more than project history.",
+    "patterns": ["知识图谱实体", "图谱关系", "knowledge graph"],
+    "keywords": ["知识图谱实体", "图谱关系", "knowledge graph"],
+    "boost": 1
+  },
+  "thinking": {
+    "description": "Sequential reasoning workspace for multi-step analysis, revisions, branching thought paths, and solution verification.",
+    "summary": "Explicit multi-step reasoning support.",
+    "purpose": "Use when a task benefits from structured reasoning, hypothesis testing, or careful revision of intermediate conclusions.",
+    "patterns": ["逐步思考", "多步推理", "分步推理", "step by step", "hypothesis", "一步一步", "推理一下"],
+    "keywords": ["逐步思考", "多步推理", "分步推理", "一步一步", "推理一下"],
+    "boost": 1.25
+  },
+  "grep_app": {
+    "description": "Public GitHub code search and file retrieval for finding similar open-source implementations and examples.",
+    "summary": "Public GitHub code search and retrieval.",
+    "purpose": "Use for searching open-source repositories, finding similar implementations, and fetching matching files from GitHub.",
+    "patterns": ["github", "开源", "类似实现", "同类项目", "similar implementation", "open source"],
+    "keywords": ["GitHub", "开源", "类似实现", "同类项目"],
+    "boost": 1.5
+  },
+  "context7": {
+    "description": "Current library and framework documentation lookup with API examples and targeted code snippets.",
+    "summary": "Up-to-date library and framework documentation search.",
+    "purpose": "Use for official docs, current APIs, and library-specific examples when external documentation is the source of truth.",
+    "patterns": ["官方文档", "react 文档", "api 文档", "查文档", "library docs", "framework docs", "最新.*api.*用法", "官方 reference"],
+    "keywords": ["官方文档", "API 文档", "查文档", "library docs", "最新 API 用法", "official reference"],
+    "boost": 1.75
+  },
+  "fetch": {
+    "description": "Direct webpage fetching and lightweight content extraction from arbitrary URLs.",
+    "summary": "Generic web fetching by URL.",
+    "purpose": "Use when you already have a URL and need to fetch page content directly without a more specialized external tool.",
+    "patterns": ["抓取.*网页", "网页内容", "抓网页", "fetch this webpage", "by url", "网页链接", "链接内容", "网页抓下来", "抓下来"],
+    "keywords": ["抓取网页", "网页内容", "网页链接", "by URL", "链接内容", "网页抓下来"],
+    "boost": 1.5
+  },
+  "desktop_commander": {
+    "description": "Desktop process control, command execution, deep file inspection, and heavyweight local file analysis.",
+    "summary": "Advanced local process and filesystem operations.",
+    "purpose": "Use for process management, broader local file access, and heavier local analysis workflows than the default workspace tools.",
+    "patterns": ["运行本地命令", "检查进程", "桌面命令", "heavy local analysis", "process control"],
+    "keywords": ["运行本地命令", "检查进程", "进程控制", "桌面命令"],
+    "boost": 1.5
+  },
+  "evomemory": {
+    "description": "Persistent project history, decisions, governance assets, benchmark memory, and durable feedback reconciliation.",
+    "summary": "Project-specific durable memory and history.",
+    "purpose": "Use for project memory lookup, durable corrections, governance context, and historical decisions that may affect current work.",
+    "patterns": ["之前的项目决策", "历史决策", "项目记忆", "durable memory", "project history", "之前记过", "项目约束", "历史偏好"],
+    "keywords": ["历史决策", "项目记忆", "project history", "之前记过", "项目约束", "历史偏好"],
+    "boost": 1.5
+  }
+}

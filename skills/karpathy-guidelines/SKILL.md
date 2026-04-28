@@ -8,6 +8,15 @@ license: MIT
 
 Behavioral guidelines to reduce common LLM coding mistakes, derived from [Andrej Karpathy's observations](https://x.com/karpathy/status/2015883857489522876) on LLM coding pitfalls.
 
+## When to Use
+
+Use when writing, reviewing, debugging, or refactoring code where the main risk is overcomplication, hidden assumptions, or vague success criteria.
+
+## Boundaries
+
+- Do not use as a substitute for a stronger domain-specific workflow skill.
+- Do not force it onto trivial one-step tasks where no extra process adds value.
+
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
 ## 1. Think Before Coding

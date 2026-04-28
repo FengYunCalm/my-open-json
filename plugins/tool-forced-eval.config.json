@@ -4,14 +4,8 @@
   "maxReusableSkillsInPrompt": 3,
   "emphasizeEvomemory": true,
   "includeVisibleMcpAppendixByDefault": false,
-  "includeVisibleMcpAppendixOnUnclearIntent": true,
+  "includeVisibleMcpAppendixOnUnclearIntent": false,
   "enableBashGuardrails": true,
   "bashGuardrailMode": "error",
-  "guardedBashCommands": [
-    "grep",
-    "find",
-    "cat",
-    "head",
-    "tail"
-  ]
+  "guardedBashCommands": ["grep", "find", "cat", "head", "tail"]
 }

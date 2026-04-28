@@ -4,7 +4,12 @@ __pycache__/
 logs/
 *.log
 *.sqlite
+*.sqlite-shm
+*.sqlite-wal
 *.pyc
+*.bak
+*:Zone.Identifier
+plugins/backups/
 mcp/mempalace_bridge_state.json
 mcp/mempalace_bridge_state.json.bak
 mcp/evomemory_bridge_state.sqlite3

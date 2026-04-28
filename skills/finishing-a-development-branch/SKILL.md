@@ -9,6 +9,15 @@ description: Use when implementation on a branch is done and the next step is de
 
 This skill helps close out branch work in a predictable way. The key is to verify the current state first, then present clear next-step options without hiding destructive actions.
 
+## When to Use
+
+Use when implementation on a branch is effectively done and the next question is whether to merge, open a PR, keep the branch, or discard it.
+
+## Boundaries
+
+- Do not use while feature work is still in progress.
+- Do not use for ordinary commit or PR creation if branch-completion decisions are not the main task.
+
 ## Workflow
 
 1. Run the relevant verification first.

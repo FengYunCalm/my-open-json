@@ -13,6 +13,15 @@ metadata:
 
 This skill helps restructure React component APIs so they scale cleanly. The core idea is to replace hidden conditional behavior with clearer composition boundaries.
 
+## When to Use
+
+Use when the task is React or Next.js component architecture work involving awkward APIs, boolean prop proliferation, compound components, context shape, or reusable composition boundaries.
+
+## Boundaries
+
+- Do not use for generic React performance tuning when component API shape is not the core issue.
+- Do not use for non-React UI work.
+
 ## Symptom Routing
 
 If the problem is **too many boolean props**, start with:

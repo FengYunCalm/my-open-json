@@ -13,6 +13,15 @@ metadata:
 
 This skill helps choose the right React or Next.js optimization rule based on the actual bottleneck. It is most useful when the task is about speed, rendering behavior, or data-flow efficiency rather than generic component design.
 
+## When to Use
+
+Use when the task is React or Next.js optimization work involving performance, bundle size, rendering behavior, hydration, data fetching, or server-client boundary decisions.
+
+## Boundaries
+
+- Do not use when the main issue is component API design rather than performance or rendering tradeoffs.
+- Do not use for non-React stacks.
+
 ## Symptom Routing
 
 If the problem is **waterfalls or slow data loading**, start with `async-` or `server-` rules.
