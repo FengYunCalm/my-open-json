@@ -813,6 +813,80 @@ def test_backend_save_entry_omits_none_metadata_values():
     assert "valid_to" not in saved
 
 
+def test_backend_keyword_query_uses_fts_index():
+    class CaptureCollection:
+        def __init__(self):
+            self.ids = []
+            self.documents = []
+            self.metadatas = []
+
+        def upsert(self, *, ids, documents, metadatas):
+            for drawer_id, document, metadata in zip(ids, documents, metadatas):
+                if drawer_id in self.ids:
+                    index = self.ids.index(drawer_id)
+                    self.documents[index] = document
+                    self.metadatas[index] = metadata
+                    continue
+                self.ids.append(drawer_id)
+                self.documents.append(document)
+                self.metadatas.append(metadata)
+
+        def count(self):
+            return len(self.ids)
+
+        def get(self, *, include, limit=20, offset=0, where=None):
+            return {
+                "ids": self.ids[offset : offset + limit],
+                "documents": self.documents[offset : offset + limit],
+                "metadatas": self.metadatas[offset : offset + limit],
+            }
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-fts-index-"))
+    collection = CaptureCollection()
+    backend = object.__new__(EvoMemoryBackend)
+    backend._collection = collection
+    backend.fts_path = str(temp_dir / "fts.sqlite3")
+    backend._fts = None
+    backend._fts_synced = False
+
+    EvoMemoryBackend.save_entry(
+        backend,
+        wing="opencode",
+        room="opencode-session",
+        content="Assistant: Parser cache refactor notes.",
+        source_file="session:ses_noise",
+        metadata={"directory": "/home/mechrevo/.config/opencode"},
+    )
+    EvoMemoryBackend.save_entry(
+        backend,
+        wing="opencode",
+        room="opencode-session",
+        content="Assistant: Project rule is do not auto run git commit without confirmation.",
+        source_file="session:ses_keyword",
+        metadata={
+            "directory": "/home/mechrevo/.config/opencode",
+            "session_id": "ses_keyword",
+            "message_id": "msg_keyword",
+            "role": "assistant",
+            "memory_tier": "project_memory",
+            "memory_key": "git_commit_behavior",
+            "memory_value": "disabled",
+        },
+    )
+
+    rows = EvoMemoryBackend.keyword_query_drawers(
+        backend,
+        query="git commit",
+        wing="opencode",
+        current_only=True,
+        limit=5,
+    )
+
+    assert [row["memory_key"] for row in rows] == ["git_commit_behavior"]
+    assert rows[0]["retrieval_source"] == "keyword"
+    assert rows[0]["keyword_rank"] <= 0
+
+
 def test_mcp_search_returns_navigation_metadata_and_preview():
     core, _backend = make_core()
 

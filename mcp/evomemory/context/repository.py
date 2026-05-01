@@ -10,6 +10,12 @@ class ContextRepository:
     def query_drawers(self, **kwargs):
         return self.backend.query_drawers(**kwargs)
 
+    def keyword_query_drawers(self, **kwargs):
+        query = getattr(self.backend, "keyword_query_drawers", None)
+        if callable(query):
+            return query(**kwargs)
+        return []
+
     def get_session_messages(self, **kwargs):
         return self.backend.get_session_messages(**kwargs)
 

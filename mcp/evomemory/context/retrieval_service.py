@@ -268,6 +268,21 @@ class ContextRetrievalService:
         filters: dict[str, Any],
         limit: int,
     ) -> list[dict[str, Any]]:
+        indexed = self.core.repository.keyword_query_drawers(
+            query=query,
+            limit=limit,
+            **filters,
+        )
+        if indexed:
+            return [
+                {
+                    **row,
+                    "search_tier": tier_name,
+                    "retrieval_source": row.get("retrieval_source") or "keyword",
+                }
+                for row in indexed
+            ]
+
         rows = self.core.repository.query_drawers(
             query=None,
             limit=limit,

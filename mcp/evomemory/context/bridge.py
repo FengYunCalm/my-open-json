@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -74,7 +76,9 @@ EVOMEMORY_HOME_DIRNAME = ".evomemory"
 EVOMEMORY_PALACE_ENV = "EVOMEMORY_PALACE_PATH"
 EVOMEMORY_COLLECTION_NAME = "evomemory_drawers"
 EVOMEMORY_STATE_FILENAME = "evomemory_bridge_state.sqlite3"
+EVOMEMORY_FTS_FILENAME = "evomemory_fts.sqlite3"
 GLOBAL_MEMORY_WING = "global-memory"
+FTS_TOKEN_RE = re.compile(r"[a-z0-9_]+|[\u4e00-\u9fff]+", re.IGNORECASE)
 
 
 def _default_runtime_state() -> dict[str, Any]:
@@ -174,6 +178,15 @@ def _preview_text(text: str, max_chars: int = PREVIEW_CHARS) -> str:
 def _working_session_dedupe_hash(role: str, text: str) -> str:
     normalized = " ".join((text or "").split()).strip().lower()
     return hashlib.sha1(f"{role}\n{normalized}".encode("utf-8")).hexdigest()
+
+
+def _fts_query(query: str | None) -> str:
+    terms = []
+    for token in FTS_TOKEN_RE.findall(query or ""):
+        clean = token.replace('"', "").strip()
+        if clean:
+            terms.append(f'"{clean}"')
+    return " OR ".join(dict.fromkeys(terms))
 
 
 def _summary_sort_key(item: dict[str, Any]) -> tuple[int, str]:
@@ -299,9 +312,13 @@ class EvoMemoryBackend:
         if config.palace_path:
             os.environ[EVOMEMORY_PALACE_ENV] = config.palace_path
         self.palace_path = config.palace_path
+        Path(self.palace_path).mkdir(parents=True, exist_ok=True)
         self.collection_name = config.collection_name or EVOMEMORY_COLLECTION_NAME
         self._client: chromadb.PersistentClient | None = None
         self._collection = None
+        self.fts_path = str(Path(self.palace_path) / EVOMEMORY_FTS_FILENAME)
+        self._fts: sqlite3.Connection | None = None
+        self._fts_synced = False
         self._kg = KnowledgeGraph(
             db_path=str(Path(self.palace_path) / "knowledge_graph.sqlite3")
         )
@@ -327,6 +344,141 @@ class EvoMemoryBackend:
                 raise
             self._collection = client.get_or_create_collection(self.collection_name)
         return self._collection
+
+    def _fts_for(self) -> sqlite3.Connection | None:
+        fts = getattr(self, "_fts", None)
+        if fts is not None:
+            return fts
+        path = getattr(self, "fts_path", None)
+        if not path:
+            return None
+        try:
+            conn = sqlite3.connect(path)
+            conn.row_factory = sqlite3.Row
+            conn.execute(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS drawers_fts USING fts5(
+                    drawer_id UNINDEXED,
+                    text,
+                    preview,
+                    memory_key,
+                    memory_value,
+                    wing UNINDEXED,
+                    directory UNINDEXED,
+                    memory_tier UNINDEXED,
+                    room UNINDEXED,
+                    session_id UNINDEXED,
+                    role UNINDEXED,
+                    source_file UNINDEXED,
+                    valid_from UNINDEXED,
+                    valid_to UNINDEXED,
+                    filed_at UNINDEXED,
+                    working_summary UNINDEXED,
+                    metadata UNINDEXED,
+                    tokenize='unicode61'
+                )
+                """
+            )
+            conn.commit()
+            self._fts = conn
+            return conn
+        except sqlite3.Error:
+            return None
+
+    def _fts_values(
+        self, drawer_id: str, text: str, metadata: dict[str, Any]
+    ) -> tuple[str, ...]:
+        return (
+            drawer_id,
+            text,
+            _preview_text(text),
+            str(metadata.get("memory_key") or ""),
+            str(metadata.get("memory_value") or ""),
+            str(metadata.get("wing") or "unknown"),
+            str(metadata.get("directory") or ""),
+            str(metadata.get("memory_tier") or ""),
+            str(metadata.get("room") or "unknown"),
+            str(metadata.get("session_id") or ""),
+            str(metadata.get("role") or ""),
+            str(metadata.get("source_file") or ""),
+            str(metadata.get("valid_from") or ""),
+            str(metadata.get("valid_to") or ""),
+            str(metadata.get("filed_at") or ""),
+            "1" if metadata.get("working_summary") is True else "0",
+            json.dumps(metadata, ensure_ascii=False, sort_keys=True),
+        )
+
+    def _fts_insert(
+        self,
+        conn: sqlite3.Connection,
+        drawer_id: str,
+        text: str,
+        metadata: dict[str, Any],
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO drawers_fts(
+                drawer_id,
+                text,
+                preview,
+                memory_key,
+                memory_value,
+                wing,
+                directory,
+                memory_tier,
+                room,
+                session_id,
+                role,
+                source_file,
+                valid_from,
+                valid_to,
+                filed_at,
+                working_summary,
+                metadata
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            self._fts_values(drawer_id, text, metadata),
+        )
+
+    def _fts_upsert(self, drawer_id: str, text: str, metadata: dict[str, Any]) -> None:
+        if not text:
+            return
+        conn = self._fts_for()
+        if conn is None:
+            return
+        try:
+            conn.execute("DELETE FROM drawers_fts WHERE drawer_id = ?", (drawer_id,))
+            self._fts_insert(conn, drawer_id, text, metadata)
+            conn.commit()
+        except sqlite3.Error:
+            return
+
+    def _fts_rebuild(self, conn: sqlite3.Connection) -> None:
+        result = self._get_all(include=["documents", "metadatas"])
+        conn.execute("DELETE FROM drawers_fts")
+        for drawer_id, text, metadata in zip(
+            result.get("ids", []),
+            result.get("documents", []),
+            result.get("metadatas", []),
+        ):
+            if text:
+                self._fts_insert(conn, drawer_id, text, metadata)
+        conn.commit()
+
+    def _fts_sync(self) -> None:
+        if getattr(self, "_fts_synced", False):
+            return
+        conn = self._fts_for()
+        if conn is None:
+            return
+        try:
+            count = self._collection_for().count()
+            indexed = conn.execute("SELECT count(*) FROM drawers_fts").fetchone()[0]
+            if indexed < count:
+                self._fts_rebuild(conn)
+            self._fts_synced = True
+        except Exception:
+            return
 
     def _make_where(
         self,
@@ -494,6 +646,82 @@ class EvoMemoryBackend:
             rows = [row for row in rows if row.get("valid_to")]
         return rows
 
+    def keyword_query_drawers(
+        self,
+        *,
+        query: str,
+        wing: str | None = None,
+        directory: str | None = None,
+        memory_tier: str | None = None,
+        current_only: bool = False,
+        historical_only: bool = False,
+        room: str | None = None,
+        session_id: str | None = None,
+        role: str | None = None,
+        source_file: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        match = _fts_query(query)
+        if not match:
+            return []
+        self._fts_sync()
+        conn = self._fts_for()
+        if conn is None:
+            return []
+
+        filters = {
+            "wing": wing,
+            "directory": directory,
+            "memory_tier": memory_tier,
+            "room": room,
+            "session_id": session_id,
+            "role": role,
+            "source_file": source_file,
+        }
+        sql = [
+            """
+            SELECT drawer_id, text, metadata, bm25(drawers_fts) AS rank
+            FROM drawers_fts
+            WHERE drawers_fts MATCH ?
+            """
+        ]
+        params: list[Any] = [match]
+        for key, value in filters.items():
+            if value is None:
+                continue
+            sql.append(f"AND {key} = ?")
+            params.append(value)
+        if current_only:
+            sql.append("AND valid_to = ''")
+        elif historical_only:
+            sql.append("AND valid_to != ''")
+        sql.append("ORDER BY rank LIMIT ? OFFSET ?")
+        params.extend([max(1, limit), max(0, offset)])
+
+        try:
+            rows = conn.execute("\n".join(sql), params).fetchall()
+        except sqlite3.Error:
+            return []
+        result = []
+        for row in rows:
+            try:
+                metadata = json.loads(row["metadata"] or "{}")
+            except json.JSONDecodeError:
+                metadata = {}
+            result.append(
+                {
+                    **self._format_row(
+                        drawer_id=row["drawer_id"],
+                        text=row["text"],
+                        metadata=metadata,
+                    ),
+                    "keyword_rank": row["rank"],
+                    "retrieval_source": "keyword",
+                }
+            )
+        return result
+
     def search(self, query: str, wing: str | None, room: str | None, limit: int):
         return self.query_drawers(query=query, wing=wing, room=room, limit=limit)
 
@@ -535,6 +763,7 @@ class EvoMemoryBackend:
             }
         )
         collection.upsert(ids=[drawer_id], documents=[content], metadatas=[payload])
+        self._fts_upsert(drawer_id, content, payload)
         return {"drawer_id": drawer_id, "wing": wing, "room": room, "metadata": payload}
 
     def import_drawers(self, drawers: list[dict[str, Any]]) -> dict[str, Any]:
@@ -555,6 +784,8 @@ class EvoMemoryBackend:
             metadatas.append(_normalize_metadata(dict(item.get("metadata") or {})))
         if ids:
             collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
+            for drawer_id, document, metadata in zip(ids, documents, metadatas):
+                self._fts_upsert(drawer_id, document, metadata)
         return {"imported_count": len(ids), "skipped_count": 0, "drawers": ids}
 
     def invalidate_memory_conflicts(
@@ -598,6 +829,10 @@ class EvoMemoryBackend:
                 documents=update_docs,
                 metadatas=update_metas,
             )
+            for drawer_id, document, metadata in zip(
+                update_ids, update_docs, update_metas
+            ):
+                self._fts_upsert(drawer_id, document, metadata)
         return len(update_ids)
 
     def invalidate_drawers(self, *, drawer_ids: list[str], valid_to: str) -> int:
@@ -628,6 +863,10 @@ class EvoMemoryBackend:
                 documents=update_docs,
                 metadatas=update_metas,
             )
+            for drawer_id, document, metadata in zip(
+                update_ids, update_docs, update_metas
+            ):
+                self._fts_upsert(drawer_id, document, metadata)
         return len(update_ids)
 
     def status(self):
