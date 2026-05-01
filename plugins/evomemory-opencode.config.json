@@ -13,6 +13,7 @@
   "maintenanceMinConfidence": 0.5,
   "maintenanceLimit": 20,
   "maintenanceThrottleMs": 300000,
+  "requestTimeoutMs": 5000,
   "ensureBridgeCommand": [
     "bash",
     "-lc",
