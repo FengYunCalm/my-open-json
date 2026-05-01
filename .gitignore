@@ -17,3 +17,5 @@ mcp/evomemory_bridge_state.sqlite3-*
 mcp/evomemory.egg-info/
 bun.lock
 .worktrees/
+opencode.json
+dcp.jsonc
