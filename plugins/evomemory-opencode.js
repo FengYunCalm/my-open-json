@@ -25,6 +25,7 @@ const DEFAULTS = {
   autoFlushOnIdle: true,
   autoFlushOnCompact: true,
   autoRunMaintenanceOnCompact: false,
+  allowSessionHistoryFlush: false,
   searchIncludeTrace: false,
   logRetrievalTrace: false,
   maintenanceProfile: "light",
@@ -32,6 +33,7 @@ const DEFAULTS = {
   maintenanceLimit: 20,
   maintenanceThrottleMs: 300000,
   requestTimeoutMs: 5000,
+  messageFlushWaitMs: 25,
   healthcheckCacheTtlMs: 1000,
   ensureBridgeCommand: [
     "bash",
@@ -206,10 +208,42 @@ function hookMessage(output) {
   };
 }
 
+function uniqueMessages(messages = []) {
+  const seen = new Set();
+  return messages.filter((message) => {
+    const id = message?.info?.id;
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
 async function getMessages(client, sessionID) {
   const result = await client.session.messages({ path: { id: sessionID } });
   if (result.error) throw new Error(`session.messages failed for ${sessionID}`);
   return result.data ?? [];
+}
+
+function runDetached(task) {
+  const promise = Promise.resolve().then(task);
+  promise.catch(() => {});
+  return promise;
+}
+
+async function waitBriefly(promise, timeoutMs) {
+  const timeout = Math.max(0, Number(timeoutMs ?? 0) || 0);
+  if (timeout === 0) return;
+  let timer;
+  try {
+    await Promise.race([
+      promise.catch(() => {}),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, timeout);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export const EvomemoryOpencodePlugin = async ({
@@ -327,35 +361,44 @@ export const EvomemoryOpencodePlugin = async ({
     return coreBlock;
   }
 
-  async function flushSession(sessionID, reason, extraMessages = []) {
-    if (!(await ensureBridge(config, client, dependencies))) return null;
+  async function flushSession(sessionID, reason, options = {}) {
+    const extraMessages = Array.isArray(options.extraMessages)
+      ? options.extraMessages
+      : [];
+    const loadSessionHistory = options.loadSessionHistory === true;
     const sessionState = getSessionState(
       sessions,
       sessionID,
       getDirectory(sessionID),
     );
-    const messages = await getMessages(client, sessionID);
-    const ids = new Set(
-      messages.map((message) => message?.info?.id).filter(Boolean),
-    );
-    const merged = [
-      ...messages,
-      ...extraMessages.filter((message) => {
-        const id = message?.info?.id;
-        if (!id || ids.has(id)) return false;
-        ids.add(id);
-        return true;
-      }),
-    ];
+    let merged = uniqueMessages(extraMessages);
+    if (loadSessionHistory) {
+      const messages = await getMessages(client, sessionID);
+      const ids = new Set(
+        messages.map((message) => message?.info?.id).filter(Boolean),
+      );
+      merged = [
+        ...messages,
+        ...extraMessages.filter((message) => {
+          const id = message?.info?.id;
+          if (!id || ids.has(id)) return false;
+          ids.add(id);
+          return true;
+        }),
+      ];
+    }
     const latestMessageID = merged.at(-1)?.info?.id;
     if (latestMessageID && latestMessageID === sessionState.lastSavedMessageID)
       return null;
-    const pending = messagesSinceCheckpoint(
-      merged,
-      sessionState.lastSavedMessageID,
-      sessionState.lastSavedMessageIndex,
-    );
+    const pending = loadSessionHistory
+      ? messagesSinceCheckpoint(
+          merged,
+          sessionState.lastSavedMessageID,
+          sessionState.lastSavedMessageIndex,
+        )
+      : merged;
     if (!pending.length) return null;
+    if (!(await ensureBridge(config, client, dependencies))) return null;
     const payload = await fetchJson(
       config.bridgeBaseUrl,
       "/internal/session/flush",
@@ -383,7 +426,8 @@ export const EvomemoryOpencodePlugin = async ({
       sessionState.lastSavedMessageID ??
       latestMessageID ??
       null;
-    const ackIndex = ackID ? findMessageIndex(merged, ackID) : -1;
+    const ackIndex =
+      loadSessionHistory && ackID ? findMessageIndex(merged, ackID) : -1;
     patchSessionState(
       sessions,
       sessionID,
@@ -457,7 +501,9 @@ export const EvomemoryOpencodePlugin = async ({
       }
 
       if (event.type === "session.idle" && config.autoFlushOnIdle) {
-        await flushSession(event.properties.sessionID, "idle").catch((error) =>
+        await flushSession(event.properties.sessionID, "idle", {
+          loadSessionHistory: config.allowSessionHistoryFlush,
+        }).catch((error) =>
           log(client, "warn", "Idle flush failed", {
             sessionID: event.properties.sessionID,
             error: String(error),
@@ -478,13 +524,18 @@ export const EvomemoryOpencodePlugin = async ({
       );
       if (config.autoFlushOnMessage && shouldPersist(text, config)) {
         const extra = hookMessage(output);
-        await flushSession(sessionID, "message", extra ? [extra] : []).catch(
-          (error) =>
+        const flushPromise = runDetached(() =>
+          flushSession(sessionID, "message", {
+            extraMessages: extra ? [extra] : [],
+            loadSessionHistory: config.allowSessionHistoryFlush,
+          }).catch((error) =>
             log(client, "warn", "Message flush failed", {
               sessionID,
               error: String(error),
             }),
+          ),
         );
+        await waitBriefly(flushPromise, config.messageFlushWaitMs);
       }
       if (!shouldSearch(text, config)) return;
       if (!(await ensureBridge(config, client, dependencies))) return;
@@ -583,15 +634,15 @@ export const EvomemoryOpencodePlugin = async ({
 
     "experimental.session.compacting": async ({ sessionID }, output) => {
       if (!config.autoFlushOnCompact) return;
-      const payload = await flushSession(sessionID, "compact").catch(
-        (error) => {
-          log(client, "warn", "Compaction flush failed", {
-            sessionID,
-            error: String(error),
-          });
-          return null;
-        },
-      );
+      const payload = await flushSession(sessionID, "compact", {
+        loadSessionHistory: config.allowSessionHistoryFlush,
+      }).catch((error) => {
+        log(client, "warn", "Compaction flush failed", {
+          sessionID,
+          error: String(error),
+        });
+        return null;
+      });
       if (payload) {
         output.context.push(
           "Recent conversation was persisted to EvoMemory before compaction.",

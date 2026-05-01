@@ -9,6 +9,7 @@ from starlette.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from evomemory.interfaces.mcp import server as server_module
 from evomemory.interfaces.mcp.server import _validate_bind_host, create_app
 
 
@@ -511,6 +512,58 @@ def test_internal_context_search_route_returns_results():
     payload = response.json()
     assert payload["results"][0]["source_file"] == "session:ses_demo"
     assert payload["results"][0]["room"] == "opencode-session"
+
+
+def test_internal_context_search_route_uses_worker_call(monkeypatch):
+    calls = []
+
+    async def fake_run_core_call(func, *args, **kwargs):
+        calls.append(func.__name__)
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(
+        server_module, "_run_core_call", fake_run_core_call, raising=False
+    )
+    client = TestClient(server_module.create_app(FakeCore()))
+
+    response = client.post(
+        "/internal/context/search",
+        json={
+            "query": "drawer navigation",
+            "directory": "/home/mechrevo/.config/opencode",
+            "session_id": "ses_demo",
+        },
+    )
+
+    assert response.status_code == 200
+    assert calls == ["search_context"]
+
+
+def test_internal_session_flush_route_uses_worker_call(monkeypatch):
+    calls = []
+
+    async def fake_run_core_call(func, *args, **kwargs):
+        calls.append(func.__name__)
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(
+        server_module, "_run_core_call", fake_run_core_call, raising=False
+    )
+    client = TestClient(server_module.create_app(FakeCore()))
+
+    response = client.post(
+        "/internal/session/flush",
+        json={
+            "session_id": "ses_demo",
+            "directory": "/home/mechrevo/.config/opencode",
+            "messages": [{"info": {"id": "msg_1"}}],
+            "reason": "message",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["saved"] == 1
+    assert calls == ["flush_session"]
 
 
 def test_internal_debug_status_route_returns_runtime_metadata():

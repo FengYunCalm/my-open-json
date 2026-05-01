@@ -92,6 +92,7 @@ test("does not trust bridge-provided system_block and renders a local safe block
   await plugin["chat.message"](
     { sessionID: "ses_demo" },
     {
+      message: { id: "msg_002", role: "user" },
       parts: [
         {
           type: "text",
@@ -160,6 +161,7 @@ test("does not query evomemory for long current-code inspection prompts", async 
   await plugin["chat.message"](
     { sessionID: "ses_code_truth" },
     {
+      message: { id: "msg_code_001", role: "user" },
       parts: [
         {
           type: "text",
@@ -431,6 +433,7 @@ test("normalizes malformed flush and search payloads without polluting session s
   await plugin["chat.message"](
     { sessionID: "ses_bad_payload" },
     {
+      message: { id: "msg_bad_001", role: "user" },
       parts: [
         {
           type: "text",
@@ -533,6 +536,7 @@ test("tracks checkpoint index from the acknowledged message id", async () => {
     worktree: "/home/mechrevo/.config/opencode",
     configOverride: {
       bridgeBaseUrl: "http://127.0.0.1:8876",
+      allowSessionHistoryFlush: true,
     },
     fetchImpl,
   });
@@ -620,7 +624,7 @@ test("includes current hook message in message flush payload", async () => {
   assert.equal(flushBodies.length, 1);
   assert.deepEqual(
     flushBodies[0].messages.map((message) => message.info.id),
-    ["msg_old", "msg_current"],
+    ["msg_current"],
   );
 });
 
@@ -671,6 +675,7 @@ test("times out stalled flush requests without blocking search", async () => {
   await plugin["chat.message"](
     { sessionID: "ses_timeout" },
     {
+      message: { id: "msg_timeout", role: "user" },
       parts: [
         {
           type: "text",
@@ -682,6 +687,180 @@ test("times out stalled flush requests without blocking search", async () => {
 
   assert.ok(calls.some((url) => url.endsWith("/internal/context/search")));
   assert.ok(logs.some((entry) => entry.message === "Message flush failed"));
+});
+
+test("chat.message returns without waiting for slow evomemory persistence", async () => {
+  const calls = [];
+  let releaseFlush;
+  const flushStarted = new Promise((resolve) => {
+    releaseFlush = resolve;
+  });
+
+  const fetchImpl = async (url) => {
+    calls.push(String(url));
+    if (String(url).endsWith("/health")) {
+      return jsonResponse({ ok: true });
+    }
+
+    if (String(url).endsWith("/internal/session/flush")) {
+      releaseFlush();
+      return new Promise(() => {});
+    }
+
+    if (String(url).endsWith("/internal/context/search")) {
+      return jsonResponse({ wing: "opencode", results: [] });
+    }
+
+    throw new Error(`unexpected url: ${url}`);
+  };
+
+  const plugin = await EvomemoryOpencodePlugin({
+    client: {
+      app: { log: async () => {} },
+      session: {
+        messages: async () => ({
+          data: [
+            {
+              info: { id: "msg_background", role: "user" },
+              parts: [{ type: "text", text: "remember this slow state" }],
+            },
+          ],
+        }),
+      },
+    },
+    directory: "/home/mechrevo/.config/opencode",
+    worktree: "/home/mechrevo/.config/opencode",
+    configOverride: {
+      bridgeBaseUrl: "http://127.0.0.1:8883",
+      requestTimeoutMs: 1000,
+    },
+    fetchImpl,
+  });
+
+  await Promise.race([
+    plugin["chat.message"](
+      { sessionID: "ses_background" },
+      {
+        message: { id: "msg_background", role: "user" },
+        parts: [
+          {
+            type: "text",
+            text: "what did we decide earlier about background persistence",
+          },
+        ],
+      },
+    ),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("chat.message did not return")), 50),
+    ),
+  ]);
+
+  await flushStarted;
+  assert.ok(calls.some((url) => url.endsWith("/internal/session/flush")));
+});
+
+test("chat.message flushes current hook message without loading full session history", async () => {
+  const flushBodies = [];
+  let sessionMessagesCalled = false;
+
+  const fetchImpl = async (url, options = {}) => {
+    if (String(url).endsWith("/health")) {
+      return jsonResponse({ ok: true });
+    }
+
+    if (String(url).endsWith("/internal/session/flush")) {
+      flushBodies.push(JSON.parse(options.body));
+      return jsonResponse({ last_saved_message_id: "msg_current_only" });
+    }
+
+    if (String(url).endsWith("/internal/context/search")) {
+      return jsonResponse({ wing: "opencode", results: [] });
+    }
+
+    throw new Error(`unexpected url: ${url}`);
+  };
+
+  const plugin = await EvomemoryOpencodePlugin({
+    client: {
+      app: { log: async () => {} },
+      session: {
+        messages: async () => {
+          sessionMessagesCalled = true;
+          throw new Error("should not load full session history");
+        },
+      },
+    },
+    directory: "/home/mechrevo/.config/opencode",
+    worktree: "/home/mechrevo/.config/opencode",
+    configOverride: {
+      bridgeBaseUrl: "http://127.0.0.1:8885",
+    },
+    fetchImpl,
+  });
+
+  await plugin["chat.message"](
+    { sessionID: "ses_current_only" },
+    {
+      message: { id: "msg_current_only", role: "user" },
+      parts: [{ type: "text", text: "remember the current message only" }],
+    },
+  );
+
+  assert.equal(sessionMessagesCalled, false);
+  assert.equal(flushBodies.length, 1);
+  assert.deepEqual(
+    flushBodies[0].messages.map((message) => message.info.id),
+    ["msg_current_only"],
+  );
+});
+
+test("idle flush does not load full session history", async () => {
+  const calls = [];
+  let sessionMessagesCalled = false;
+
+  const fetchImpl = async (url) => {
+    calls.push(String(url));
+    if (String(url).endsWith("/health")) {
+      return jsonResponse({ ok: true });
+    }
+
+    if (String(url).endsWith("/internal/session/flush")) {
+      throw new Error("idle should not flush unbounded session history");
+    }
+
+    throw new Error(`unexpected url: ${url}`);
+  };
+
+  const plugin = await EvomemoryOpencodePlugin({
+    client: {
+      app: { log: async () => {} },
+      session: {
+        messages: async () => {
+          sessionMessagesCalled = true;
+          throw new Error("should not load full session history");
+        },
+      },
+    },
+    directory: "/home/mechrevo/.config/opencode",
+    worktree: "/home/mechrevo/.config/opencode",
+    configOverride: {
+      bridgeBaseUrl: "http://127.0.0.1:8886",
+    },
+    fetchImpl,
+  });
+
+  await plugin.event({
+    event: {
+      type: "session.idle",
+      properties: { sessionID: "ses_idle_large" },
+    },
+  });
+
+  assert.equal(sessionMessagesCalled, false);
+  assert.equal(
+    calls.filter((url) => url.endsWith("/internal/session/flush")).length,
+    0,
+  );
 });
 
 test("logs successful flush/search details and reuses cached bridge health within one message", async () => {
@@ -739,6 +918,7 @@ test("logs successful flush/search details and reuses cached bridge health withi
   await plugin["chat.message"](
     { sessionID: "ses_log" },
     {
+      message: { id: "msg_log_001", role: "user" },
       parts: [
         {
           type: "text",
@@ -804,6 +984,7 @@ test("runs maintenance after compaction when enabled", async () => {
     directory: "/home/mechrevo/.config/opencode",
     worktree: "/home/mechrevo/.config/opencode",
     configOverride: {
+      allowSessionHistoryFlush: true,
       autoRunMaintenanceOnCompact: true,
       maintenanceProfile: "light",
       maintenanceMinConfidence: 0.7,

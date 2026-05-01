@@ -3,10 +3,12 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import os
+from functools import partial
 from typing import Any
 
 import uvicorn
 from mcp.server.fastmcp import FastMCP
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -39,6 +41,10 @@ def _validate_bind_host(host: str) -> None:
     raise SystemExit(
         "Refusing to bind evomemory bridge to a non-loopback host without EVOMEMORY_ALLOW_REMOTE=1"
     )
+
+
+async def _run_core_call(func, *args, **kwargs):
+    return await run_in_threadpool(partial(func, *args, **kwargs))
 
 
 def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
@@ -349,7 +355,8 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
             return rejection
         payload = await request.json()
         return JSONResponse(
-            core.search_context(
+            await _run_core_call(
+                core.search_context,
                 payload["query"],
                 payload["directory"],
                 session_id=payload.get("session_id"),
@@ -366,7 +373,8 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
             return rejection
         payload = await request.json()
         return JSONResponse(
-            core.flush_session(
+            await _run_core_call(
+                core.flush_session,
                 payload["session_id"],
                 payload["directory"],
                 payload.get("messages", []),

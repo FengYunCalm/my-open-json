@@ -19,6 +19,7 @@ function getSpawnImpl(spawnImpl) {
     });
     child.unref();
     return {
+      kill: () => child.kill(),
       exited: new Promise((resolve, reject) => {
         child.once("error", reject);
         child.once("exit", (code) => resolve(code ?? 0));
@@ -56,6 +57,29 @@ async function defaultLog(client, level, message, extra = undefined) {
       body: { service: "evomemory-opencode", level, message, extra },
     })
     .catch(() => {});
+}
+
+async function waitForProcessExit(proc, timeoutMs) {
+  if (!proc?.exited) return 0;
+  const timeout = Math.max(1, Number(timeoutMs ?? 5000) || 5000);
+  const exited = Promise.resolve(proc.exited);
+  exited.catch(() => {});
+  let timer;
+  try {
+    return await Promise.race([
+      exited,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          proc.kill?.();
+          reject(
+            new Error(`ensureBridgeCommand timed out after ${timeout}ms`),
+          );
+        }, timeout);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function healthcheckStatus(config, dependencies = {}, options = {}) {
@@ -138,7 +162,10 @@ async function startManagedBridge(config, client, dependencies = {}) {
       stdout: "ignore",
       stderr: "ignore",
     });
-    const exitCode = await proc.exited;
+    const exitCode = await waitForProcessExit(
+      proc,
+      config.ensureBridgeCommandTimeoutMs ?? config.requestTimeoutMs,
+    );
     if (exitCode !== 0) {
       await logImpl(client, "warn", "ensureBridgeCommand exited non-zero", {
         exitCode,

@@ -234,3 +234,66 @@ test("ensureBridge coalesces concurrent startup attempts per bridge url", async 
   assert.deepEqual(await Promise.all([first, second]), [true, true]);
   assert.equal(spawnCalls.length, 1);
 });
+
+test("ensureBridge times out stalled managed startup before direct fallback", async () => {
+  const spawnCalls = [];
+  let healthChecks = 0;
+
+  const fetchImpl = async (url) => {
+    if (!String(url).endsWith("/health")) {
+      throw new Error(`unexpected url: ${url}`);
+    }
+    healthChecks += 1;
+    const ok = healthChecks >= 5;
+    return {
+      ok,
+      json: async () => ({ ok }),
+    };
+  };
+
+  const config = {
+    bridgeBaseUrl: "http://127.0.0.1:8884",
+    ensureBridgeCommand: [
+      "bash",
+      "-lc",
+      "systemctl --user start evomemory-bridge.service",
+    ],
+    ensureBridgeCommandTimeoutMs: 25,
+    directBridgeCommand: [
+      "python",
+      "evomemory/interfaces/mcp/server.py",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "8884",
+    ],
+    healthcheckCacheTtlMs: 0,
+  };
+
+  const ok = await ensureBridge(config, null, {
+    fetchImpl,
+    spawnImpl: (options) => {
+      spawnCalls.push(options.cmd);
+      if (options.cmd[0] === "bash") return { exited: new Promise(() => {}) };
+      return { exited: Promise.resolve(0) };
+    },
+    sleepImpl: async (ms) => {
+      if (ms > 0) await new Promise((resolve) => setTimeout(resolve, 0));
+    },
+    logImpl: async () => {},
+    now: () => Date.now(),
+  });
+
+  assert.equal(ok, true);
+  assert.deepEqual(spawnCalls, [
+    ["bash", "-lc", "systemctl --user start evomemory-bridge.service"],
+    [
+      "python",
+      "evomemory/interfaces/mcp/server.py",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "8884",
+    ],
+  ]);
+});
