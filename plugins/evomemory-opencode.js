@@ -18,6 +18,9 @@ const DEFAULTS = {
   minSearchChars: 16,
   minPersistChars: 8,
   maxInjectedChars: 1800,
+  minRetrievalScore: 0.28,
+  safeExcerptChars: 180,
+  preloadCoreMemory: true,
   autoFlushOnMessage: true,
   autoFlushOnIdle: true,
   autoFlushOnCompact: true,
@@ -51,7 +54,9 @@ function loadConfig() {
 function createSessionState(directory) {
   return {
     directory,
+    coreBlock: "",
     systemBlock: "",
+    allowCoreMemory: true,
     lastSavedMessageID: null,
     lastSavedMessageIndex: null,
   };
@@ -272,6 +277,56 @@ export const EvomemoryOpencodePlugin = async ({
     return payload;
   }
 
+  function renderBlock(payload) {
+    return buildSystemBlock(payload, config.maxInjectedChars, {
+      minRetrievalScore: config.minRetrievalScore,
+      safeExcerptChars: config.safeExcerptChars,
+    });
+  }
+
+  async function preloadCoreMemory(sessionID, dir) {
+    if (!config.preloadCoreMemory) return null;
+    if (!(await ensureBridge(config, client, dependencies))) return null;
+    const search = await fetchJson(
+      config.bridgeBaseUrl,
+      "/internal/context/search",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          session_id: sessionID,
+          directory: dir,
+          query: "stable project memory user preference",
+          include_trace: false,
+        }),
+        requestTimeoutMs: config.requestTimeoutMs,
+        fetchImpl: dependencies.fetchImpl,
+      },
+    );
+    const normalizedSearch = normalizeSearchPayload(search);
+    if (normalizedSearch.issues.length) {
+      await log(
+        client,
+        "warn",
+        "EvoMemory core preload returned unexpected payload",
+        {
+          sessionID,
+          issues: normalizedSearch.issues,
+        },
+      );
+    }
+    const coreBlock = renderBlock({
+      ...normalizedSearch.value,
+      results: [],
+    });
+    patchSessionState(sessions, sessionID, { coreBlock }, dir);
+    await log(client, "debug", "EvoMemory core memory preloaded", {
+      sessionID,
+      coreMemoryCount: normalizedSearch.value.core_memory.length,
+      coreBlockLength: coreBlock.length,
+    });
+    return coreBlock;
+  }
+
   async function flushSession(sessionID, reason, extraMessages = []) {
     if (!(await ensureBridge(config, client, dependencies))) return null;
     const sessionState = getSessionState(
@@ -368,6 +423,12 @@ export const EvomemoryOpencodePlugin = async ({
             requestTimeoutMs: config.requestTimeoutMs,
             fetchImpl: dependencies.fetchImpl,
           }).catch(() => {});
+          await preloadCoreMemory(info.id, info.directory).catch((error) =>
+            log(client, "warn", "Core memory preload failed", {
+              sessionID: info.id,
+              error: String(error),
+            }),
+          );
         }
         return;
       }
@@ -407,10 +468,12 @@ export const EvomemoryOpencodePlugin = async ({
 
     "chat.message": async ({ sessionID }, output) => {
       const text = collectText(output.parts);
+      const allowCoreMemory =
+        !shouldPersist(text, config) && !text.trim().startsWith("/");
       patchSessionState(
         sessions,
         sessionID,
-        { systemBlock: "" },
+        { systemBlock: "", allowCoreMemory },
         getDirectory(sessionID),
       );
       if (config.autoFlushOnMessage && shouldPersist(text, config)) {
@@ -481,10 +544,7 @@ export const EvomemoryOpencodePlugin = async ({
           topScores: topCandidate?.scores ?? {},
         });
       }
-      const systemBlock = buildSystemBlock(
-        normalizedSearch.value,
-        config.maxInjectedChars,
-      );
+      const systemBlock = renderBlock(normalizedSearch.value);
       patchSessionState(
         sessions,
         sessionID,
@@ -502,8 +562,23 @@ export const EvomemoryOpencodePlugin = async ({
     "experimental.chat.system.transform": async ({ sessionID }, output) => {
       if (!sessionID) return;
       const session = sessions.get(sessionID);
-      if (!session?.systemBlock) return;
-      output.system.push(session.systemBlock);
+      if (session?.allowCoreMemory === false && !session?.systemBlock) return;
+      const block = session?.systemBlock || session?.coreBlock;
+      if (block) {
+        output.system.push(block);
+        return;
+      }
+      const loaded = await preloadCoreMemory(
+        sessionID,
+        getDirectory(sessionID),
+      ).catch((error) => {
+        log(client, "warn", "Lazy core memory preload failed", {
+          sessionID,
+          error: String(error),
+        });
+        return null;
+      });
+      if (loaded) output.system.push(loaded);
     },
 
     "experimental.session.compacting": async ({ sessionID }, output) => {

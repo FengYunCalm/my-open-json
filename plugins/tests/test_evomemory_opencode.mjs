@@ -234,6 +234,84 @@ test("does not flush evomemory on tiny chinese chatter", async () => {
   );
 });
 
+test("preloads core memory so tiny follow-up prompts can still receive stable context", async () => {
+  const calls = [];
+
+  const fetchImpl = async (url) => {
+    calls.push(String(url));
+    if (String(url).endsWith("/health")) {
+      return jsonResponse({ ok: true });
+    }
+
+    if (String(url).endsWith("/internal/session/start")) {
+      return jsonResponse({ session_id: "ses_core", directory: "/repo" });
+    }
+
+    if (String(url).endsWith("/internal/context/search")) {
+      return jsonResponse({
+        wing: "opencode",
+        core_memory: [
+          {
+            memory_tier: "project_memory",
+            memory_key: "code_change_permission",
+            memory_value: "confirm_first",
+            source_file: "session:ses_core",
+          },
+        ],
+        results: [
+          {
+            drawer_id: "drawer_should_not_preload",
+            similarity: 0.99,
+          },
+        ],
+      });
+    }
+
+    if (String(url).endsWith("/internal/session/flush")) {
+      throw new Error("should not flush tiny follow-up prompts");
+    }
+
+    throw new Error(`unexpected url: ${url}`);
+  };
+
+  const plugin = await EvomemoryOpencodePlugin({
+    client: {
+      app: { log: async () => {} },
+      session: { messages: async () => ({ data: [] }) },
+    },
+    directory: "/repo",
+    worktree: "/repo",
+    configOverride: {
+      bridgeBaseUrl: "http://127.0.0.1:8882",
+    },
+    fetchImpl,
+  });
+
+  await plugin.event({
+    event: {
+      type: "session.created",
+      properties: { info: { id: "ses_core", directory: "/repo" } },
+    },
+  });
+  await plugin["chat.message"](
+    { sessionID: "ses_core" },
+    { parts: [{ type: "text", text: "继续" }] },
+  );
+
+  const output = { system: [] };
+  await plugin["experimental.chat.system.transform"](
+    { sessionID: "ses_core" },
+    output,
+  );
+
+  assert.equal(
+    calls.filter((url) => url.endsWith("/internal/context/search")).length,
+    1,
+  );
+  assert.match(output.system[0], /code_change_permission=confirm_first/);
+  assert.doesNotMatch(output.system[0], /drawer_should_not_preload/);
+});
+
 test("forwards include_trace and logs retrieval trace when enabled", async () => {
   const calls = [];
   const logs = [];
