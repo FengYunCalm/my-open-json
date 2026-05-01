@@ -144,14 +144,92 @@ class HybridRetrievalBackend:
         return []
 
     def kg_query(self, entity, as_of=None, direction="both"):
-        return {"entity": entity, "facts": [], "count": 0, "as_of": as_of, "direction": direction}
+        return {
+            "entity": entity,
+            "facts": [],
+            "count": 0,
+            "as_of": as_of,
+            "direction": direction,
+        }
+
+
+class KeywordRecallBackend(HybridRetrievalBackend):
+    def query_drawers(
+        self,
+        *,
+        query=None,
+        wing=None,
+        directory=None,
+        memory_tier=None,
+        current_only=False,
+        historical_only=False,
+        room=None,
+        session_id=None,
+        role=None,
+        source_file=None,
+        limit=20,
+        offset=0,
+    ):
+        if query is not None:
+            return [
+                {
+                    "drawer_id": "drawer_semantic_noise",
+                    "text": "Assistant: Parser cache refactor notes.",
+                    "preview": "Assistant: Parser cache refactor notes.",
+                    "wing": "opencode",
+                    "room": "opencode-session",
+                    "directory": "/home/mechrevo/.config/opencode",
+                    "source_file": "session:ses_noise",
+                    "session_id": "ses_noise",
+                    "message_id": "msg_noise",
+                    "role": "assistant",
+                    "memory_tier": "working_session",
+                    "memory_key": None,
+                    "memory_value": None,
+                    "valid_from": "2026-04-01T10:00:00+00:00",
+                    "valid_to": None,
+                    "filed_at": "2026-04-01T10:00:00+00:00",
+                    "similarity": 0.95,
+                    "distance": 0.05,
+                    "metadata": {},
+                }
+            ][:limit]
+
+        if wing != "opencode" or not current_only:
+            return []
+        return [
+            {
+                "drawer_id": "drawer_keyword_recall",
+                "text": "Assistant: Project rule is do not auto run git commit without confirmation.",
+                "preview": "Assistant: Project rule is do not auto run git commit without confirmation.",
+                "wing": "opencode",
+                "room": "opencode-session",
+                "directory": "/home/mechrevo/.config/opencode",
+                "source_file": "session:ses_keyword_recall",
+                "session_id": "ses_keyword_recall",
+                "message_id": "msg_keyword_recall",
+                "role": "assistant",
+                "memory_tier": "project_memory",
+                "memory_key": "git_commit_behavior",
+                "memory_value": "disabled",
+                "valid_from": "2026-04-01T11:00:00+00:00",
+                "valid_to": None,
+                "filed_at": "2026-04-01T11:00:00+00:00",
+                "similarity": 0.0,
+                "distance": None,
+                "metadata": {},
+            }
+        ][:limit]
 
 
 def test_search_context_prioritizes_keyword_overlap_over_higher_similarity_noise():
     from evomemory.context.bridge import BridgeConfig, BridgeCore
 
     temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-hybrid-rank-"))
-    core = BridgeCore(BridgeConfig(state_path=temp_dir / "state.sqlite3"), backend=HybridRetrievalBackend())
+    core = BridgeCore(
+        BridgeConfig(state_path=temp_dir / "state.sqlite3"),
+        backend=HybridRetrievalBackend(),
+    )
 
     result = core.search_context(
         "git commit",
@@ -172,7 +250,10 @@ def test_search_context_exposes_retrieval_trace_for_ranked_candidates():
     from evomemory.context.bridge import BridgeConfig, BridgeCore
 
     temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-hybrid-trace-"))
-    core = BridgeCore(BridgeConfig(state_path=temp_dir / "state.sqlite3"), backend=HybridRetrievalBackend())
+    core = BridgeCore(
+        BridgeConfig(state_path=temp_dir / "state.sqlite3"),
+        backend=HybridRetrievalBackend(),
+    )
 
     result = core.search_context(
         "git commit",
@@ -188,4 +269,28 @@ def test_search_context_exposes_retrieval_trace_for_ranked_candidates():
     assert any(
         reason.startswith("keyword(")
         for reason in trace["ranked_candidates"][0]["reasons"]
+    )
+
+
+def test_search_context_recalls_keyword_hits_missed_by_semantic_query():
+    from evomemory.context.bridge import BridgeConfig, BridgeCore
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-keyword-recall-"))
+    core = BridgeCore(
+        BridgeConfig(state_path=temp_dir / "state.sqlite3"),
+        backend=KeywordRecallBackend(),
+    )
+
+    result = core.search_context(
+        "git commit",
+        "/home/mechrevo/.config/opencode",
+        session_id="ses_keyword_recall",
+        include_trace=True,
+    )
+
+    assert result["results"][0]["drawer_id"] == "drawer_keyword_recall"
+    assert result["results"][0]["retrieval_source"] == "keyword"
+    assert (
+        result["retrieval_trace"]["ranked_candidates"][0]["drawer_id"]
+        == "drawer_keyword_recall"
     )

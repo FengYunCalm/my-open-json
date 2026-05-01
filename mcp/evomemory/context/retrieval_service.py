@@ -40,7 +40,12 @@ class ContextRetrievalService:
     def _candidate_limit(self, limit: int) -> int:
         return max(limit * 8, 20)
 
-    def _keyword_overlap(self, query: str, item: dict[str, Any]) -> tuple[float, list[str]]:
+    def _keyword_candidate_limit(self, limit: int) -> int:
+        return max(self._candidate_limit(limit) * 4, 100)
+
+    def _keyword_overlap(
+        self, query: str, item: dict[str, Any]
+    ) -> tuple[float, list[str]]:
         query_tokens = _tokenize(query)
         if not query_tokens:
             return 0.0, []
@@ -78,7 +83,14 @@ class ContextRetrievalService:
             _normalized_text(item.get("memory_key")),
             _normalized_text(item.get("memory_value")),
         ]
-        return 1.0 if any(normalized_query and normalized_query in haystack for haystack in haystacks) else 0.0
+        return (
+            1.0
+            if any(
+                normalized_query and normalized_query in haystack
+                for haystack in haystacks
+            )
+            else 0.0
+        )
 
     def _semantic_score(self, item: dict[str, Any]) -> float:
         try:
@@ -248,6 +260,37 @@ class ContextRetrievalService:
         )
         return ranked, total_count, max(0, total_count - len(ranked)), trace
 
+    def _keyword_recall(
+        self,
+        *,
+        query: str,
+        tier_name: str,
+        filters: dict[str, Any],
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        rows = self.core.repository.query_drawers(
+            query=None,
+            limit=limit,
+            **filters,
+        )
+        recalled: list[dict[str, Any]] = []
+        for row in rows:
+            keyword_score, _tokens = self._keyword_overlap(query, row)
+            if not (
+                keyword_score > 0
+                or self._memory_key_match(query, row) > 0
+                or self._exact_phrase_match(query, row) > 0
+            ):
+                continue
+            recalled.append(
+                {
+                    **row,
+                    "search_tier": tier_name,
+                    "retrieval_source": "keyword",
+                }
+            )
+        return recalled
+
     def search_context(
         self,
         *,
@@ -259,6 +302,7 @@ class ContextRetrievalService:
     ) -> tuple[list[dict[str, Any]], int, int, dict[str, Any] | None]:
         limit = max(1, int(self.core.config.search_limit or 0))
         candidate_limit = self._candidate_limit(limit)
+        keyword_limit = self._keyword_candidate_limit(limit)
         tiers = []
         if session_id:
             tiers.append(("session", {"session_id": session_id}))
@@ -276,6 +320,14 @@ class ContextRetrievalService:
             )
             for row in rows:
                 candidates.append({**row, "search_tier": tier_name})
+            candidates.extend(
+                self._keyword_recall(
+                    query=query,
+                    tier_name=tier_name,
+                    filters={**filters, "current_only": True},
+                    limit=keyword_limit,
+                )
+            )
 
         return self.rank_candidates(
             query=query,
@@ -297,6 +349,7 @@ class ContextRetrievalService:
         include_trace: bool = False,
     ) -> tuple[list[dict[str, Any]], int, int, dict[str, Any] | None]:
         candidate_limit = self._candidate_limit(limit)
+        keyword_limit = self._keyword_candidate_limit(limit)
         rows = self.core.repository.query_drawers(
             query=query,
             wing=wing,
@@ -306,7 +359,23 @@ class ContextRetrievalService:
             room=room,
             limit=candidate_limit,
         )
-        candidates = [{**row, "search_tier": row.get("search_tier") or "filtered"} for row in rows]
+        candidates = [
+            {**row, "search_tier": row.get("search_tier") or "filtered"} for row in rows
+        ]
+        candidates.extend(
+            self._keyword_recall(
+                query=query,
+                tier_name="filtered",
+                filters={
+                    "wing": wing,
+                    "memory_tier": memory_tier,
+                    "current_only": current_only,
+                    "historical_only": historical_only,
+                    "room": room,
+                },
+                limit=keyword_limit,
+            )
+        )
         return self.rank_candidates(
             query=query,
             candidates=candidates,

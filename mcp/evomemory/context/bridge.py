@@ -549,7 +549,9 @@ class EvoMemoryBackend:
             if not drawer_id:
                 continue
             ids.append(drawer_id)
-            documents.append(sanitize_content(item.get("text") or item.get("content") or ""))
+            documents.append(
+                sanitize_content(item.get("text") or item.get("content") or "")
+            )
             metadatas.append(_normalize_metadata(dict(item.get("metadata") or {})))
         if ids:
             collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
@@ -1077,6 +1079,7 @@ class BridgeCore:
             "reason_summary": item.get("reason_summary"),
             "retrieval_scores": item.get("retrieval_scores"),
             "search_tier": item.get("search_tier"),
+            "retrieval_source": item.get("retrieval_source"),
         }
 
     def _format_context_hit(self, item: dict[str, Any]) -> dict[str, Any]:
@@ -1102,6 +1105,7 @@ class BridgeCore:
             "similarity": item.get("similarity", 0),
             "reason_summary": item.get("reason_summary"),
             "retrieval_scores": item.get("retrieval_scores"),
+            "retrieval_source": item.get("retrieval_source"),
         }
 
     def _append_block_lines(
