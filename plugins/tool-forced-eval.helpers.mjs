@@ -67,6 +67,13 @@ const OSS_HINTS = [
   /(GitHub|开源|同类项目|类似项目|类似实现|示例仓库|示例项目|同类插件)/,
 ]
 
+const PROJECT_CONTEXT_HINTS = [
+  /\b(project onboarding|project learning|repo audit|repository audit|code audit|architecture review|learn (this|the) (project|repo|repository|codebase)|familiarize (me )?with (this|the) (project|repo|repository|codebase))\b/i,
+  /(学习|熟悉).*(项目|仓库|代码库|源码)/,
+  /(审计|检查|梳理).*(项目|仓库|代码|插件|架构)/,
+  /(项目学习|项目审计|代码审计|架构梳理|架构审查|熟悉仓库|熟悉项目)/,
+]
+
 const CURRENT_CODE_HINTS = [
   /\b(current implementation|current code|source code|codebase|repo|repository|module|plugin)\b/i,
   /\bexplain the current implementation\b/i,
@@ -133,6 +140,10 @@ export function shouldInject(text = '') {
 
 function matchesAny(patterns, text) {
   return patterns.some((pattern) => pattern.test(text))
+}
+
+export function isProjectContextTask(text = '') {
+  return matchesAny(PROJECT_CONTEXT_HINTS, text)
 }
 
 export function classifyIntent(text = '') {
@@ -212,9 +223,21 @@ export function buildTaskRouting(text = '', visibleMcpCatalog = [], config = {},
   const intent = classifyIntent(text)
   const mcpCatalog = normalizeMcpCatalog(visibleMcpCatalog)
   const shortlistLimit = config.shortlistLimit ?? 3
-  const mcpShortlistLimit = 1
+  const projectContextTask = isProjectContextTask(text)
+  const mcpShortlistLimit = projectContextTask ? 2 : 1
   const nativeTools = []
-  const mcps = rankMcpRecommendations(text, mcpCatalog, { limit: mcpShortlistLimit, intentKey: intent.key })
+  const rankedMcps = rankMcpRecommendations(text, mcpCatalog, { limit: mcpShortlistLimit, intentKey: intent.key })
+  const evomemoryEntry = mcpCatalog.find((entry) => entry.name === 'evomemory')
+  const projectContextMcps = (() => {
+    if (!projectContextTask || !evomemoryEntry || rankedMcps.some((mcp) => mcp.name === 'evomemory')) {
+      return rankedMcps
+    }
+    const [evomemoryMcp] = rankMcpRecommendations(text, [evomemoryEntry], { limit: 1, intentKey: 'history' })
+    if (!evomemoryMcp) return rankedMcps
+    if (rankedMcps.length >= mcpShortlistLimit) return [rankedMcps[0], evomemoryMcp]
+    return [...rankedMcps, evomemoryMcp]
+  })()
+  const mcps = dedupeByName(projectContextMcps).slice(0, mcpShortlistLimit)
   const skills = detectSkillRecommendations(text, shortlistLimit, skillCatalog, intent.key)
 
   let summary = 'No single tool family is clearly dominant. Prefer the smallest correct tool or skill for the task.'
@@ -233,7 +256,9 @@ export function buildTaskRouting(text = '', visibleMcpCatalog = [], config = {},
       summary = 'Look for public repository examples before reasoning from scratch.'
       break
     case 'local-code':
-      summary = 'Inspect the local codebase with native workspace tools before reaching for MCPs.'
+      summary = projectContextTask
+        ? 'Inspect current code with native tools, and use EvoMemory for prior decisions or stable constraints before project learning, audit, or architecture conclusions.'
+        : 'Inspect the local codebase with native workspace tools before reaching for MCPs.'
       nativeTools.push(buildNativeTool('glob', 'Find files by name or path pattern.'))
       nativeTools.push(buildNativeTool('grep', 'Search repository contents for symbols, strings, or patterns.'))
       nativeTools.push(buildNativeTool('read', 'Open only the relevant files and sections.'))

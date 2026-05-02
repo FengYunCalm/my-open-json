@@ -52,7 +52,7 @@ const DEFAULT_CONFIG = {
 const TOOL_DESCRIPTION_HINTS = [
   {
     match: (toolID) => toolID === "evomemory_search_context",
-    note: "Prefer this early in non-trivial tasks when prior decisions, stable constraints, earlier fixes, or historical feedback may matter. Re-run it at major checkpoints if the task uncovers new facts.",
+    note: "Prefer this early in non-trivial project onboarding, audits, architecture reviews, and cross-file changes when prior decisions, stable constraints, earlier fixes, or historical feedback may matter. Current files remain the source of truth.",
   },
   {
     match: (toolID) => toolID === "evomemory_record_feedback",
@@ -93,7 +93,7 @@ const TOOL_DESCRIPTION_HINTS = [
   },
   {
     match: (toolID) => toolID.startsWith("evomemory_"),
-    note: "Prefer this when the task needs project history, prior decisions, stable preferences, governance constraints, feedback, or benchmark results. Automatic plugin injection may have already added some context, but that is not guaranteed. This does not replace reading current code or docs when those are the source of truth.",
+    note: "Prefer this when the task needs project history, prior decisions, stable preferences, governance constraints, feedback, benchmark results, or historical context for project learning and audits. Automatic plugin injection may have already added some context, but that is not guaranteed. This does not replace reading current code or docs when those are the source of truth.",
   },
 ];
 
@@ -1079,8 +1079,8 @@ function buildEvomemoryPriorityLines(mcpNames, routing, config) {
 
   return [
     "### EvoMemory Priority",
-    "- Use `evomemory_search_context` early when prior decisions or stable constraints may matter; revisit only at major checkpoints.",
-    "- Use `evomemory_record_feedback` for durable corrections, but do not treat EvoMemory as the source of truth for current code or current docs.",
+    "- Use `evomemory_search_context` early for non-trivial project learning, audits, architecture decisions, or cross-file changes when prior decisions or stable constraints may matter.",
+    "- Use `evomemory_record_feedback` for durable corrections, but treat current files and current docs as the source of truth for implementation facts.",
     "",
   ];
 }

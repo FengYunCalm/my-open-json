@@ -61,6 +61,12 @@ test("shouldSearch prefers history-seeking prompts over current-code inspection 
     ),
     true,
   );
+  assert.equal(
+    shouldSearch("project onboarding for this repository and architecture review", {
+      minSearchChars: 16,
+    }),
+    true,
+  );
 });
 
 test("shouldSearch handles Chinese history prompts and current-code prompts", () => {
@@ -86,6 +92,12 @@ test("shouldSearch handles Chinese history prompts and current-code prompts", ()
       minSearchChars: 16,
     }),
     false,
+  );
+  assert.equal(
+    shouldSearch("学习一下这个项目源码并审计 evomemory 插件有没有问题", {
+      minSearchChars: 16,
+    }),
+    true,
   );
 });
 

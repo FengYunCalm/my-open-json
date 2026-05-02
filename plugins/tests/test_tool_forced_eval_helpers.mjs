@@ -9,6 +9,7 @@ import {
   classifyIntent,
   findGuardedBashCommand,
   getInjectionSkipReason,
+  isProjectContextTask,
   isLikelySmallTalk,
   shouldInject,
 } from '../tool-forced-eval.helpers.mjs'
@@ -84,6 +85,9 @@ test('classifies the major task intents', () => {
   assert.equal(classifyIntent('what did we decide about project memory?').key, 'history')
   assert.equal(classifyIntent('run npm test and inspect the process').key, 'local-system')
   assert.equal(classifyIntent('compare the architecture tradeoffs').key, 'reasoning')
+  assert.equal(classifyIntent('学习一下这个插件源码').key, 'local-code')
+  assert.equal(isProjectContextTask('学习一下这个插件源码'), true)
+  assert.equal(isProjectContextTask('please explain the current implementation in plugins/tool-forced-eval.js'), false)
 })
 
 test('builds a short routed recommendation set', () => {
@@ -115,6 +119,15 @@ test('builds a short routed recommendation set', () => {
   assert.equal(codeRouting.skills[0]?.name, 'code-locator')
   assert.equal(codeRouting.intent.key, 'local-code')
   assert.deepEqual(codeRouting.nativeTools.map((item) => item.name), ['glob', 'grep', 'read'])
+
+  const projectLearningRouting = buildTaskRouting('学习一下这个插件源码并审计有没有问题', mcpCatalog, { shortlistLimit: 3 }, catalog)
+  assert.equal(projectLearningRouting.intent.key, 'local-code')
+  assert.deepEqual(projectLearningRouting.nativeTools.map((item) => item.name), ['glob', 'grep', 'read'])
+  assert.ok(projectLearningRouting.mcps.some((item) => item.name === 'evomemory'))
+
+  const narrowCurrentCodeRouting = buildTaskRouting('please explain the current implementation in plugins/tool-forced-eval.js', mcpCatalog, { shortlistLimit: 3 }, catalog)
+  assert.equal(narrowCurrentCodeRouting.intent.key, 'local-code')
+  assert.ok(!narrowCurrentCodeRouting.mcps.some((item) => item.name === 'evomemory'))
 
   const frontendRouting = buildTaskRouting('我想做一个有设计感的前端页面', mcpCatalog, { shortlistLimit: 3 }, catalog)
   assert.equal(frontendRouting.skills[0]?.name, 'frontend-design')

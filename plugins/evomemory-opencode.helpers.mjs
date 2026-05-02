@@ -28,6 +28,12 @@ const HISTORY_HINTS = [
   /\bstable preferences?\b/i,
   /(之前|先前|以前|过去|历史|历史决策|偏好|约束|反馈|基准|记忆)/,
 ];
+const PROJECT_LEARNING_HINTS = [
+  /\b(project onboarding|project learning|repo audit|repository audit|code audit|architecture review|learn (this|the) (project|repo|repository|codebase)|familiarize (me )?with (this|the) (project|repo|repository|codebase))\b/i,
+  /(学习|熟悉).*(项目|仓库|代码库|源码|插件)/,
+  /(审计|检查|梳理).*(项目|仓库|代码|插件|架构)/,
+  /(项目学习|项目审计|代码审计|架构梳理|架构审查|熟悉仓库|熟悉项目)/,
+];
 const CURRENT_CODE_HINTS = [
   /\bcurrent implementation\b/i,
   /\bcurrent code\b/i,
@@ -91,6 +97,11 @@ export function shouldSearch(text, config = {}) {
     pattern.test(text || ""),
   );
   if (hasHistoryHint) return true;
+
+  const hasProjectLearningHint = PROJECT_LEARNING_HINTS.some((pattern) =>
+    pattern.test(text || ""),
+  );
+  if (hasProjectLearningHint) return true;
 
   const hasCurrentCodeHint = CURRENT_CODE_HINTS.some((pattern) =>
     pattern.test(text || ""),

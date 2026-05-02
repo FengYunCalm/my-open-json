@@ -10,25 +10,37 @@ function jsonResponse(payload) {
   };
 }
 
-test("prewarms evomemory bridge during plugin initialization", async () => {
+test("prewarms evomemory bridge without blocking plugin initialization", async () => {
   const calls = [];
 
   const fetchImpl = async (url) => {
     calls.push(String(url));
-    return jsonResponse({ ok: true });
+    return new Promise(() => {});
   };
 
-  await EvomemoryOpencodePlugin({
-    client: {
-      app: { log: async () => {} },
-      session: { messages: async () => ({ data: [] }) },
-    },
-    directory: "/home/mechrevo/.config/opencode",
-    worktree: "/home/mechrevo/.config/opencode",
-    fetchImpl,
-  });
+  await Promise.race([
+    EvomemoryOpencodePlugin({
+      client: {
+        app: { log: async () => {} },
+        session: { messages: async () => ({ data: [] }) },
+      },
+      directory: "/home/mechrevo/.config/opencode",
+      worktree: "/home/mechrevo/.config/opencode",
+      configOverride: {
+        bridgeBaseUrl: "http://127.0.0.1:8891",
+        directBridgeCommand: [],
+        ensureBridgeCommand: [],
+        requestTimeoutMs: 100,
+      },
+      fetchImpl,
+      sleepImpl: async () => {},
+    }),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("plugin initialization blocked")), 50),
+    ),
+  ]);
 
-  assert.ok(calls.includes("http://127.0.0.1:8765/health"));
+  assert.ok(calls.includes("http://127.0.0.1:8891/health"));
 });
 
 test("does not trust bridge-provided system_block and renders a local safe block", async () => {
@@ -384,6 +396,59 @@ test("forwards include_trace and logs retrieval trace when enabled", async () =>
   );
 });
 
+test("skips repeated context search while a session is in failure cooldown", async () => {
+  const calls = [];
+  let now = 1000;
+
+  const fetchImpl = async (url) => {
+    calls.push(String(url));
+    if (String(url).endsWith("/health")) {
+      return jsonResponse({ ok: true });
+    }
+
+    if (String(url).endsWith("/internal/context/search")) {
+      throw new Error("search backend unavailable");
+    }
+
+    throw new Error(`unexpected url: ${url}`);
+  };
+
+  const plugin = await EvomemoryOpencodePlugin({
+    client: {
+      app: { log: async () => {} },
+      session: { messages: async () => ({ data: [] }) },
+    },
+    directory: "/home/mechrevo/.config/opencode",
+    worktree: "/home/mechrevo/.config/opencode",
+    configOverride: {
+      autoFlushOnMessage: false,
+      bridgeBaseUrl: "http://127.0.0.1:8892",
+      searchFailureCooldownMs: 1000,
+    },
+    fetchImpl,
+    now: () => now,
+  });
+
+  const message = {
+    parts: [
+      {
+        type: "text",
+        text: "what did we decide earlier about search cooldown behavior",
+      },
+    ],
+  };
+
+  await plugin["chat.message"]({ sessionID: "ses_search_cooldown" }, message);
+  await plugin["chat.message"]({ sessionID: "ses_search_cooldown" }, message);
+  now += 1001;
+  await plugin["chat.message"]({ sessionID: "ses_search_cooldown" }, message);
+
+  assert.equal(
+    calls.filter((url) => url.endsWith("/internal/context/search")).length,
+    2,
+  );
+});
+
 test("normalizes malformed flush and search payloads without polluting session state", async () => {
   const logs = [];
 
@@ -536,33 +601,22 @@ test("tracks checkpoint index from the acknowledged message id", async () => {
     worktree: "/home/mechrevo/.config/opencode",
     configOverride: {
       bridgeBaseUrl: "http://127.0.0.1:8876",
-      allowSessionHistoryFlush: true,
     },
     fetchImpl,
   });
 
-  await plugin["chat.message"](
-    { sessionID: "ses_checkpoint" },
-    {
-      parts: [
-        {
-          type: "text",
-          text: "what did we decide earlier about git commit behavior",
-        },
-      ],
+  await plugin.event({
+    event: {
+      type: "session.idle",
+      properties: { sessionID: "ses_checkpoint" },
     },
-  );
-  await plugin["chat.message"](
-    { sessionID: "ses_checkpoint" },
-    {
-      parts: [
-        {
-          type: "text",
-          text: "what did we decide earlier about test execution behavior",
-        },
-      ],
+  });
+  await plugin.event({
+    event: {
+      type: "session.idle",
+      properties: { sessionID: "ses_checkpoint" },
     },
-  );
+  });
 
   assert.equal(flushBodies.length, 2);
   assert.deepEqual(
@@ -814,7 +868,7 @@ test("chat.message flushes current hook message without loading full session his
   );
 });
 
-test("idle flush does not load full session history", async () => {
+test("idle flush can still avoid loading session history when lifecycle flush is disabled", async () => {
   const calls = [];
   let sessionMessagesCalled = false;
 
@@ -845,6 +899,7 @@ test("idle flush does not load full session history", async () => {
     worktree: "/home/mechrevo/.config/opencode",
     configOverride: {
       bridgeBaseUrl: "http://127.0.0.1:8886",
+      allowLifecycleHistoryFlush: false,
     },
     fetchImpl,
   });
@@ -860,6 +915,62 @@ test("idle flush does not load full session history", async () => {
   assert.equal(
     calls.filter((url) => url.endsWith("/internal/session/flush")).length,
     0,
+  );
+});
+
+test("idle flush loads only bounded recent session history by default", async () => {
+  const flushBodies = [];
+  let sessionMessagesCalled = false;
+
+  const fetchImpl = async (url, options = {}) => {
+    if (String(url).endsWith("/health")) {
+      return jsonResponse({ ok: true });
+    }
+
+    if (String(url).endsWith("/internal/session/flush")) {
+      flushBodies.push(JSON.parse(options.body));
+      return jsonResponse({ last_saved_message_id: "msg_005" });
+    }
+
+    throw new Error(`unexpected url: ${url}`);
+  };
+
+  const plugin = await EvomemoryOpencodePlugin({
+    client: {
+      app: { log: async () => {} },
+      session: {
+        messages: async () => {
+          sessionMessagesCalled = true;
+          return {
+            data: Array.from({ length: 5 }, (_, index) => ({
+              info: { id: `msg_00${index + 1}`, role: index % 2 ? "assistant" : "user" },
+              parts: [{ type: "text", text: `bounded history ${index + 1}` }],
+            })),
+          };
+        },
+      },
+    },
+    directory: "/home/mechrevo/.config/opencode",
+    worktree: "/home/mechrevo/.config/opencode",
+    configOverride: {
+      bridgeBaseUrl: "http://127.0.0.1:8887",
+      maxLifecycleHistoryMessages: 2,
+    },
+    fetchImpl,
+  });
+
+  await plugin.event({
+    event: {
+      type: "session.idle",
+      properties: { sessionID: "ses_idle_bounded" },
+    },
+  });
+
+  assert.equal(sessionMessagesCalled, true);
+  assert.equal(flushBodies.length, 1);
+  assert.deepEqual(
+    flushBodies[0].messages.map((message) => message.info.id),
+    ["msg_004", "msg_005"],
   );
 });
 
@@ -915,6 +1026,10 @@ test("logs successful flush/search details and reuses cached bridge health withi
     fetchImpl,
   });
 
+  const healthCallsBeforeMessage = calls.filter((entry) =>
+    entry.url.endsWith("/health"),
+  ).length;
+
   await plugin["chat.message"](
     { sessionID: "ses_log" },
     {
@@ -928,9 +1043,10 @@ test("logs successful flush/search details and reuses cached bridge health withi
     },
   );
 
-  assert.equal(
-    calls.filter((entry) => entry.url.endsWith("/health")).length,
-    1,
+  assert.ok(
+    calls.filter((entry) => entry.url.endsWith("/health")).length -
+      healthCallsBeforeMessage <=
+      1,
   );
   assert.ok(
     logs.some((entry) => entry.message === "EvoMemory session flush completed"),

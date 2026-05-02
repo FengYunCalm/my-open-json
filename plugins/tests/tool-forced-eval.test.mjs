@@ -83,7 +83,7 @@ test("injects routed tool-forced-eval guidance through system transform", async 
   assert.match(injected, /Detected intent: `local-code`/);
   assert.match(
     injected,
-    /Inspect the local codebase with native workspace tools before reaching for MCPs\./,
+    /Inspect current code with native tools, and use EvoMemory for prior decisions or stable constraints before project learning, audit, or architecture conclusions\./,
   );
   assert.match(injected, /Preferred native tools right now:/);
   assert.match(injected, /- `glob`: Find files by name or path pattern\./);
@@ -100,7 +100,8 @@ test("injects routed tool-forced-eval guidance through system transform", async 
     injected,
     /Prefer workspace read\/search tools over `bash` for simple repository search or file-reading work\./,
   );
-  assert.doesNotMatch(injected, /### EvoMemory Priority/);
+  assert.match(injected, /### EvoMemory Priority/);
+  assert.match(injected, /`evomemory_\*`/);
   assert.doesNotMatch(injected, /Visible MCP tools from local config:/);
   assert.doesNotMatch(injected, /must call the skill tool/i);
   assert.doesNotMatch(injected, /call the MCP tool immediately/i);
@@ -354,7 +355,7 @@ test("only adds tool guidance for MCPs that still opt in", async () => {
   );
   assert.match(
     evomemoryOutput.description,
-    /Prefer this early in non-trivial tasks when prior decisions, stable constraints, earlier fixes, or historical feedback may matter/i,
+    /Prefer this early in non-trivial project onboarding, audits, architecture reviews, and cross-file changes/i,
   );
 
   const evomemoryFeedbackOutput = {

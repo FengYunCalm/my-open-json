@@ -11,6 +11,8 @@
   "logRetrievalTrace": false,
   "autoFlushOnIdle": true,
   "autoFlushOnCompact": true,
+  "allowLifecycleHistoryFlush": true,
+  "maxLifecycleHistoryMessages": 40,
   "autoRunMaintenanceOnCompact": false,
   "maintenanceProfile": "light",
   "maintenanceMinConfidence": 0.5,

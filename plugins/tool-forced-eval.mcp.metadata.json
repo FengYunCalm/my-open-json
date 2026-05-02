@@ -75,8 +75,8 @@
     "description": "Persistent project history, decisions, governance assets, benchmark memory, and durable feedback reconciliation.",
     "summary": "Project-specific durable memory and history.",
     "purpose": "Use for project memory lookup, durable corrections, governance context, and historical decisions that may affect current work.",
-    "patterns": ["之前的项目决策", "历史决策", "项目记忆", "durable memory", "project history", "之前记过", "项目约束", "历史偏好"],
-    "keywords": ["历史决策", "项目记忆", "project history", "之前记过", "项目约束", "历史偏好"],
+    "patterns": ["之前的项目决策", "历史决策", "项目记忆", "durable memory", "project history", "之前记过", "项目约束", "历史偏好", "学习.*项目", "熟悉.*仓库", "项目审计", "代码审计", "架构梳理", "project onboarding", "project learning", "repo audit", "architecture review", "stable constraints", "prior decisions"],
+    "keywords": ["历史决策", "项目记忆", "project history", "之前记过", "项目约束", "历史偏好", "学习项目", "熟悉仓库", "项目审计", "代码审计", "架构梳理", "历史上下文", "project onboarding", "repo audit", "architecture review", "stable constraints", "prior decisions"],
     "boost": 1.5
   }
 }

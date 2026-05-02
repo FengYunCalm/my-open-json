@@ -47,6 +47,7 @@ const MCP_CASES = [
   ['帮我搜开源仓库类似实现', 'grep_app'],
   ['帮我回顾之前的项目决策', 'evomemory'],
   ['帮我找一下之前记过的项目约束', 'evomemory'],
+  ['帮我学习项目并做代码审计', 'evomemory'],
   ['帮我运行本地命令并检查进程', 'desktop_commander'],
   ['帮我抓取这个网页', 'fetch'],
   ['把这个网页抓下来', 'fetch'],

@@ -26,6 +26,8 @@ const DEFAULTS = {
   autoFlushOnCompact: true,
   autoRunMaintenanceOnCompact: false,
   allowSessionHistoryFlush: false,
+  allowLifecycleHistoryFlush: true,
+  maxLifecycleHistoryMessages: 40,
   searchIncludeTrace: false,
   logRetrievalTrace: false,
   maintenanceProfile: "light",
@@ -33,6 +35,9 @@ const DEFAULTS = {
   maintenanceLimit: 20,
   maintenanceThrottleMs: 300000,
   requestTimeoutMs: 5000,
+  searchRequestTimeoutMs: 1500,
+  preloadRequestTimeoutMs: 1000,
+  searchFailureCooldownMs: 30000,
   messageFlushWaitMs: 25,
   healthcheckCacheTtlMs: 1000,
   ensureBridgeCommand: [
@@ -61,6 +66,8 @@ function createSessionState(directory) {
     allowCoreMemory: true,
     lastSavedMessageID: null,
     lastSavedMessageIndex: null,
+    corePreloadCooldownUntil: 0,
+    contextSearchCooldownUntil: 0,
   };
 }
 
@@ -218,6 +225,12 @@ function uniqueMessages(messages = []) {
   });
 }
 
+function limitRecentMessages(messages = [], maxMessages = 0) {
+  const limit = Number(maxMessages ?? 0);
+  if (!Number.isInteger(limit) || limit <= 0) return [...messages];
+  return messages.slice(-limit);
+}
+
 async function getMessages(client, sessionID) {
   const result = await client.session.messages({ path: { id: sessionID } });
   if (result.error) throw new Error(`session.messages failed for ${sessionID}`);
@@ -228,6 +241,36 @@ function runDetached(task) {
   const promise = Promise.resolve().then(task);
   promise.catch(() => {});
   return promise;
+}
+
+function getClockNow(dependencies) {
+  return typeof dependencies.now === "function" ? dependencies.now() : Date.now();
+}
+
+function getPositiveDuration(value, fallback) {
+  const parsed = Number(value ?? fallback);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function isInCooldown(until, dependencies) {
+  return Number(until ?? 0) > getClockNow(dependencies);
+}
+
+function markCooldown(
+  sessions,
+  sessionID,
+  field,
+  config,
+  dependencies,
+  fallbackDirectory,
+) {
+  const cooldownMs = getPositiveDuration(config.searchFailureCooldownMs, 30000);
+  patchSessionState(
+    sessions,
+    sessionID,
+    { [field]: getClockNow(dependencies) + cooldownMs },
+    fallbackDirectory,
+  );
 }
 
 async function waitBriefly(promise, timeoutMs) {
@@ -271,7 +314,13 @@ export const EvomemoryOpencodePlugin = async ({
   const getDirectory = (sessionID) =>
     sessions.get(sessionID)?.directory ?? worktree ?? directory;
 
-  await ensureBridge(config, client, dependencies);
+  runDetached(() =>
+    ensureBridge(config, client, dependencies).catch((error) =>
+      log(client, "warn", "EvoMemory bridge prewarm failed", {
+        error: String(error),
+      }),
+    ),
+  );
 
   async function runMaintenance(sessionID) {
     if (!config.autoRunMaintenanceOnCompact) return null;
@@ -320,11 +369,14 @@ export const EvomemoryOpencodePlugin = async ({
 
   async function preloadCoreMemory(sessionID, dir) {
     if (!config.preloadCoreMemory) return null;
+    const session = getSessionState(sessions, sessionID, dir);
+    if (isInCooldown(session.corePreloadCooldownUntil, dependencies)) {
+      return null;
+    }
     if (!(await ensureBridge(config, client, dependencies))) return null;
-    const search = await fetchJson(
-      config.bridgeBaseUrl,
-      "/internal/context/search",
-      {
+    let search;
+    try {
+      search = await fetchJson(config.bridgeBaseUrl, "/internal/context/search", {
         method: "POST",
         body: JSON.stringify({
           session_id: sessionID,
@@ -332,10 +384,23 @@ export const EvomemoryOpencodePlugin = async ({
           query: "stable project memory user preference",
           include_trace: false,
         }),
-        requestTimeoutMs: config.requestTimeoutMs,
+        requestTimeoutMs: getPositiveDuration(
+          config.preloadRequestTimeoutMs,
+          config.requestTimeoutMs,
+        ),
         fetchImpl: dependencies.fetchImpl,
-      },
-    );
+      });
+    } catch (error) {
+      markCooldown(
+        sessions,
+        sessionID,
+        "corePreloadCooldownUntil",
+        config,
+        dependencies,
+        dir,
+      );
+      throw error;
+    }
     const normalizedSearch = normalizeSearchPayload(search);
     if (normalizedSearch.issues.length) {
       await log(
@@ -373,7 +438,10 @@ export const EvomemoryOpencodePlugin = async ({
     );
     let merged = uniqueMessages(extraMessages);
     if (loadSessionHistory) {
-      const messages = await getMessages(client, sessionID);
+      const messages = limitRecentMessages(
+        await getMessages(client, sessionID),
+        options.maxSessionHistoryMessages,
+      );
       const ids = new Set(
         messages.map((message) => message?.info?.id).filter(Boolean),
       );
@@ -502,7 +570,9 @@ export const EvomemoryOpencodePlugin = async ({
 
       if (event.type === "session.idle" && config.autoFlushOnIdle) {
         await flushSession(event.properties.sessionID, "idle", {
-          loadSessionHistory: config.allowSessionHistoryFlush,
+          loadSessionHistory:
+            config.allowLifecycleHistoryFlush || config.allowSessionHistoryFlush,
+          maxSessionHistoryMessages: config.maxLifecycleHistoryMessages,
         }).catch((error) =>
           log(client, "warn", "Idle flush failed", {
             sessionID: event.properties.sessionID,
@@ -527,7 +597,7 @@ export const EvomemoryOpencodePlugin = async ({
         const flushPromise = runDetached(() =>
           flushSession(sessionID, "message", {
             extraMessages: extra ? [extra] : [],
-            loadSessionHistory: config.allowSessionHistoryFlush,
+            loadSessionHistory: false,
           }).catch((error) =>
             log(client, "warn", "Message flush failed", {
               sessionID,
@@ -538,6 +608,14 @@ export const EvomemoryOpencodePlugin = async ({
         await waitBriefly(flushPromise, config.messageFlushWaitMs);
       }
       if (!shouldSearch(text, config)) return;
+      const session = getSessionState(
+        sessions,
+        sessionID,
+        getDirectory(sessionID),
+      );
+      if (isInCooldown(session.contextSearchCooldownUntil, dependencies)) {
+        return;
+      }
       if (!(await ensureBridge(config, client, dependencies))) return;
       const includeTrace = Boolean(
         config.searchIncludeTrace || config.logRetrievalTrace,
@@ -553,10 +631,21 @@ export const EvomemoryOpencodePlugin = async ({
             query: text,
             include_trace: includeTrace,
           }),
-          requestTimeoutMs: config.requestTimeoutMs,
+          requestTimeoutMs: getPositiveDuration(
+            config.searchRequestTimeoutMs,
+            config.requestTimeoutMs,
+          ),
           fetchImpl: dependencies.fetchImpl,
         },
       ).catch((error) => {
+        markCooldown(
+          sessions,
+          sessionID,
+          "contextSearchCooldownUntil",
+          config,
+          dependencies,
+          getDirectory(sessionID),
+        );
         log(client, "warn", "Context search failed", {
           sessionID,
           error: String(error),
@@ -635,7 +724,9 @@ export const EvomemoryOpencodePlugin = async ({
     "experimental.session.compacting": async ({ sessionID }, output) => {
       if (!config.autoFlushOnCompact) return;
       const payload = await flushSession(sessionID, "compact", {
-        loadSessionHistory: config.allowSessionHistoryFlush,
+        loadSessionHistory:
+          config.allowLifecycleHistoryFlush || config.allowSessionHistoryFlush,
+        maxSessionHistoryMessages: config.maxLifecycleHistoryMessages,
       }).catch((error) => {
         log(client, "warn", "Compaction flush failed", {
           sessionID,
