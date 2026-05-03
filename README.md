@@ -1,11 +1,11 @@
 # OpenCode-json
 
-This repository tracks a portable OpenCode configuration, bundled skills, plugins,
-and local MCP helpers.
+This repository tracks portable OpenCode runtime assets, bundled skills,
+plugins, and local MCP helpers. Machine-local configuration and runtime state
+are intentionally kept out of git.
 
 ## Tracked content
 
-- `opencode.json`: checked-in config template with a placeholder API key
 - `skills/`: local skills used by OpenCode
 - `plugins/`: local plugin scripts and related tests
 - `mcp/`: local MCP helpers and integration code
@@ -14,10 +14,13 @@ and local MCP helpers.
 ## Ignored runtime data
 
 The repository does not track runtime-only files such as logs, caches, sqlite
-databases, and local state snapshots.
+databases, local state snapshots, or machine-local OpenCode config files such as
+`opencode.json` and `dcp.jsonc`.
 
 ## Local setup
 
 1. Install dependencies with `npm install`.
-2. Replace `provider.openai.options.apiKey` in `opencode.json` locally.
-3. Keep the checked-in `opencode.json` on the placeholder value when pushing.
+2. Create or update `opencode.json` locally with the providers and MCP servers
+   for the current machine.
+3. Do not commit local credentials, API endpoints, sqlite databases, logs, or
+   generated runtime state.
