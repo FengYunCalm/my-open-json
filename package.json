@@ -5,7 +5,7 @@
     "@modelcontextprotocol/server-memory": "2026.1.26",
     "@modelcontextprotocol/server-sequential-thinking": "2025.12.18",
     "@nick-vi/opencode-type-inject": "1.5.2",
-    "@opencode-ai/plugin": "1.14.31",
+    "@opencode-ai/plugin": "latest",
     "@tarquinen/opencode-dcp": "3.1.9",
     "@upstash/context7-mcp": "2.1.7",
     "@wonderwhy-er/desktop-commander": "^0.2.38"
