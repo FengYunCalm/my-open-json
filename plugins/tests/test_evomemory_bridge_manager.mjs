@@ -297,3 +297,27 @@ test("ensureBridge times out stalled managed startup before direct fallback", as
     ],
   ]);
 });
+
+test("ensureBridge treats invalid direct bridge urls as unavailable", async () => {
+  const logs = [];
+  const ok = await ensureBridge(
+    {
+      bridgeBaseUrl: "not a url",
+      ensureBridgeCommand: [],
+      healthcheckCacheTtlMs: 0,
+    },
+    null,
+    {
+      fetchImpl: async () => ({ ok: false, json: async () => ({ ok: false }) }),
+      sleepImpl: async () => {},
+      logImpl: async (_client, level, message, extra) =>
+        logs.push({ level, message, extra }),
+      now: () => Date.now(),
+    },
+  );
+
+  assert.equal(ok, false);
+  assert.ok(
+    logs.some((entry) => entry.message === "Failed to prepare direct bridge fallback"),
+  );
+});

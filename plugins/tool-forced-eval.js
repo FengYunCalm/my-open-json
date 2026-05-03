@@ -475,6 +475,22 @@ function getConcreteKnownMcpToolIDs(name, knownMcpToolIDs = new Map()) {
   return knownMcpToolIDs.get(name) ? [...knownMcpToolIDs.get(name)] : [];
 }
 
+function getConfiguredMcpTargets(name, rulesList = []) {
+  const targets = new Set();
+  const prefixes = [`${name}_`, `mcp__${name}__`];
+
+  for (const rules of rulesList) {
+    if (!isPlainObject(rules)) continue;
+    for (const target of Object.keys(rules)) {
+      if (target === name || prefixes.some((prefix) => target.startsWith(prefix))) {
+        targets.add(target);
+      }
+    }
+  }
+
+  return [...targets];
+}
+
 function areAllKnownTargetsDenied(rules, targets = [], denyValues = new Set()) {
   const concreteTargets = targets.filter(
     (target) => typeof target === "string" && target && !target.includes("*"),
@@ -542,14 +558,22 @@ function isMcpAllowed(
   agentName = "build",
   knownMcpToolIDs = new Map(),
 ) {
-  const targets = getKnownMcpTargets(name, knownMcpToolIDs);
+  const agentConfig = isPlainObject(resolvedConfig.agent?.[agentName])
+    ? resolvedConfig.agent[agentName]
+    : {};
+  const targets = [
+    ...getKnownMcpTargets(name, knownMcpToolIDs),
+    ...getConfiguredMcpTargets(name, [
+      resolvedConfig.tools,
+      resolvedConfig.permission,
+      agentConfig.tools,
+      agentConfig.permission,
+    ]),
+  ];
   const concreteKnownToolIDs = getConcreteKnownMcpToolIDs(
     name,
     knownMcpToolIDs,
   );
-  const agentConfig = isPlainObject(resolvedConfig.agent?.[agentName])
-    ? resolvedConfig.agent[agentName]
-    : {};
 
   const globalToolDecision = resolveRuleDecision(resolvedConfig.tools, targets);
   const agentToolDecision = resolveRuleDecision(agentConfig.tools, targets);

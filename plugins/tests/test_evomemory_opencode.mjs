@@ -743,6 +743,129 @@ test("times out stalled flush requests without blocking search", async () => {
   assert.ok(logs.some((entry) => entry.message === "Message flush failed"));
 });
 
+test("times out stalled response bodies without blocking search", async () => {
+  const calls = [];
+  const logs = [];
+
+  const fetchImpl = async (url) => {
+    calls.push(String(url));
+    if (String(url).endsWith("/health")) {
+      return jsonResponse({ ok: true });
+    }
+
+    if (String(url).endsWith("/internal/session/flush")) {
+      return {
+        ok: true,
+        json: async () => new Promise(() => {}),
+      };
+    }
+
+    if (String(url).endsWith("/internal/context/search")) {
+      return jsonResponse({ wing: "opencode", results: [] });
+    }
+
+    throw new Error(`unexpected url: ${url}`);
+  };
+
+  const plugin = await EvomemoryOpencodePlugin({
+    client: {
+      app: { log: async (entry) => logs.push(entry.body) },
+      session: { messages: async () => ({ data: [] }) },
+    },
+    directory: "/home/mechrevo/.config/opencode",
+    worktree: "/home/mechrevo/.config/opencode",
+    configOverride: {
+      bridgeBaseUrl: "http://127.0.0.1:8888",
+      requestTimeoutMs: 5,
+    },
+    fetchImpl,
+  });
+
+  await plugin["chat.message"](
+    { sessionID: "ses_body_timeout" },
+    {
+      message: { id: "msg_body_timeout", role: "user" },
+      parts: [
+        {
+          type: "text",
+          text: "what did we decide earlier about response body timeouts",
+        },
+      ],
+    },
+  );
+
+  assert.ok(calls.some((url) => url.endsWith("/internal/context/search")));
+  assert.ok(logs.some((entry) => entry.message === "Message flush failed"));
+});
+
+test("serializes concurrent flushes for the same session", async () => {
+  const flushBodies = [];
+  let releaseFirstFlush;
+
+  const fetchImpl = async (url, options = {}) => {
+    if (String(url).endsWith("/health")) {
+      return jsonResponse({ ok: true });
+    }
+
+    if (String(url).endsWith("/internal/session/flush")) {
+      flushBodies.push(JSON.parse(options.body));
+      if (flushBodies.length === 1) {
+        await new Promise((resolve) => {
+          releaseFirstFlush = resolve;
+        });
+      }
+      return jsonResponse({ last_saved_message_id: "msg_002" });
+    }
+
+    throw new Error(`unexpected url: ${url}`);
+  };
+
+  const plugin = await EvomemoryOpencodePlugin({
+    client: {
+      app: { log: async () => {} },
+      session: {
+        messages: async () => ({
+          data: [
+            {
+              info: { id: "msg_001", role: "user" },
+              parts: [{ type: "text", text: "first concurrent flush" }],
+            },
+            {
+              info: { id: "msg_002", role: "assistant" },
+              parts: [{ type: "text", text: "second concurrent flush" }],
+            },
+          ],
+        }),
+      },
+    },
+    directory: "/home/mechrevo/.config/opencode",
+    worktree: "/home/mechrevo/.config/opencode",
+    configOverride: {
+      bridgeBaseUrl: "http://127.0.0.1:8889",
+      allowLifecycleHistoryFlush: true,
+    },
+    fetchImpl,
+  });
+
+  const first = plugin.event({
+    event: { type: "session.idle", properties: { sessionID: "ses_serial" } },
+  });
+  const second = plugin.event({
+    event: { type: "session.idle", properties: { sessionID: "ses_serial" } },
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(flushBodies.length, 1);
+  releaseFirstFlush();
+  await Promise.all([first, second]);
+
+  assert.equal(flushBodies.length, 1);
+  assert.deepEqual(
+    flushBodies[0].messages.map((message) => message.info.id),
+    ["msg_001", "msg_002"],
+  );
+});
+
 test("chat.message returns without waiting for slow evomemory persistence", async () => {
   const calls = [];
   let releaseFlush;

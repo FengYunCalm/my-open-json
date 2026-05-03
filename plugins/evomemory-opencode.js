@@ -66,6 +66,7 @@ function createSessionState(directory) {
     allowCoreMemory: true,
     lastSavedMessageID: null,
     lastSavedMessageIndex: null,
+    flushInFlight: null,
     corePreloadCooldownUntil: 0,
     contextSearchCooldownUntil: 0,
   };
@@ -197,14 +198,30 @@ async function fetchJson(baseUrl, pathname, options = {}) {
         ),
       ),
     ]);
+    if (!response.ok) {
+      const text = await Promise.race([
+        response.text(),
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`${pathname} timed out after ${timeout}ms`)),
+            timeout,
+          ),
+        ),
+      ]);
+      throw new Error(`${pathname} failed: ${response.status} ${text}`);
+    }
+    return await Promise.race([
+      response.json(),
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`${pathname} timed out after ${timeout}ms`)),
+          timeout,
+        ),
+      ),
+    ]);
   } finally {
     clearTimeout(timer);
   }
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`${pathname} failed: ${response.status} ${text}`);
-  }
-  return response.json();
 }
 
 function hookMessage(output) {
@@ -426,7 +443,7 @@ export const EvomemoryOpencodePlugin = async ({
     return coreBlock;
   }
 
-  async function flushSession(sessionID, reason, options = {}) {
+  async function performFlushSession(sessionID, reason, options = {}) {
     const extraMessages = Array.isArray(options.extraMessages)
       ? options.extraMessages
       : [];
@@ -513,6 +530,29 @@ export const EvomemoryOpencodePlugin = async ({
       ackID,
     });
     return payload;
+  }
+
+  async function flushSession(sessionID, reason, options = {}) {
+    const fallbackDirectory = getDirectory(sessionID);
+    const sessionState = getSessionState(sessions, sessionID, fallbackDirectory);
+    const previousFlush = sessionState.flushInFlight ?? Promise.resolve();
+    const flush = previousFlush
+      .catch(() => {})
+      .then(() => performFlushSession(sessionID, reason, options));
+    patchSessionState(sessions, sessionID, { flushInFlight: flush }, fallbackDirectory);
+    try {
+      return await flush;
+    } finally {
+      const current = getSessionState(sessions, sessionID, getDirectory(sessionID));
+      if (current.flushInFlight === flush) {
+        patchSessionState(
+          sessions,
+          sessionID,
+          { flushInFlight: null },
+          getDirectory(sessionID),
+        );
+      }
+    }
   }
 
   return {

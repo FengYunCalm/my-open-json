@@ -1766,6 +1766,68 @@ test("suppresses MCP recommendation when all known concrete tools are denied", a
   );
 });
 
+test("suppresses MCP recommendation when likely concrete tools are denied before tool definitions", async () => {
+  const tempRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "tool-forced-eval-predefinition-tool-deny-"),
+  );
+  const home = path.join(tempRoot, "home");
+  const directory = path.join(tempRoot, "directory");
+  const worktree = path.join(tempRoot, "worktree");
+  fs.mkdirSync(path.join(home, ".config", "opencode"), { recursive: true });
+  fs.mkdirSync(directory);
+  fs.mkdirSync(worktree);
+
+  fs.writeFileSync(
+    path.join(directory, "opencode.json"),
+    JSON.stringify({
+      mcp: {
+        private_docs: {
+          enabled: true,
+          description: "Private product and engineering documentation search.",
+          type: "remote",
+        },
+      },
+      permission: {
+        private_docs_search: "deny",
+      },
+    }),
+  );
+
+  await withEnv(
+    {
+      HOME: home,
+      OPENCODE_CONFIG: undefined,
+      OPENCODE_CONFIG_DIR: undefined,
+      OPENCODE_CONFIG_CONTENT: undefined,
+    },
+    async () => {
+      const plugin = await createPlugin({ directory, worktree });
+
+      await plugin["chat.message"](
+        { sessionID: "session-predefinition-concrete-deny" },
+        {
+          message: { parts: [] },
+          parts: [
+            {
+              type: "text",
+              text: "look up the private engineering docs for this product",
+            },
+          ],
+        },
+      );
+
+      const output = { system: [] };
+      await plugin["experimental.chat.system.transform"](
+        { sessionID: "session-predefinition-concrete-deny", model: {} },
+        output,
+      );
+
+      const injected = output.system.at(-1) ?? "";
+      assert.doesNotMatch(injected, /`private_docs_\*`/);
+    },
+  );
+});
+
 test("does not let tools skill allow override permission skill deny", async () => {
   const tempRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), "tool-forced-eval-skill-permission-deny-"),

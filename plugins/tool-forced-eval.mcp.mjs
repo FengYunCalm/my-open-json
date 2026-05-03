@@ -18,6 +18,13 @@ const STOP_WORDS = new Set([
   "在", "请", "帮", "这个", "那个", "一个", "吗", "是", "我", "你",
 ]);
 
+const DANGEROUS_PROMPT_PATTERNS = [
+  /ignore\s+(all\s+)?previous\s+instructions?/gi,
+  /reveal\s+(secrets?|tokens?|credentials?)/gi,
+  /system\s+prompt/gi,
+  /developer\s+(message|instructions?)/gi,
+];
+
 const INTENT_TOKEN_HINTS = {
   "memory-maintenance": ["memory", "feedback", "belief", "gene", "capsule", "maintain", "history"],
   history: ["memory", "history", "decisions", "preferences", "constraints", "feedback", "prior", "previous"],
@@ -114,6 +121,19 @@ function humanizeName(name = "") {
     .trim();
 }
 
+function sanitizePromptText(text = "") {
+  let sanitized = String(text ?? "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[`]/g, "")
+    .replace(/\b(?:system|developer|assistant|user)\s*:/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  for (const pattern of DANGEROUS_PROMPT_PATTERNS) {
+    sanitized = sanitized.replace(pattern, "[redacted]");
+  }
+  return sanitized;
+}
+
 function buildQueryWeights(text = "", intentKey = "unclear") {
   return buildSharedQueryWeights(text, intentKey, {
     tokenize,
@@ -142,21 +162,22 @@ export function createMcpCatalogEntry(name, entryConfig = {}) {
 
   const summary = [mergedEntry.description, mergedEntry.summary, mergedEntry.purpose, mergedEntry.title]
     .find((value) => typeof value === "string" && value.trim())?.trim() || "specialized external tool capability";
+  const safeSummary = sanitizePromptText(summary) || "specialized external tool capability";
   const rulePatterns = compileRulePatterns(mergedEntry.patterns);
   const rulePhrases = normalizeRulePhrases(mergedEntry.keywords);
 
   return {
     name,
-    summary,
-    reason: summary,
+    summary: safeSummary,
+    reason: safeSummary,
     rulePatterns,
     rulePhrases,
     ruleBoost: typeof mergedEntry.boost === "number" ? mergedEntry.boost : 0,
     searchText: [
       name,
       humanizeName(name),
-      summary,
-      typeof mergedEntry.note === "string" ? mergedEntry.note : "",
+      safeSummary,
+      typeof mergedEntry.note === "string" ? sanitizePromptText(mergedEntry.note) : "",
       typeof mergedEntry.type === "string" ? mergedEntry.type : "",
       collectCommandHints(mergedEntry),
     ].filter(Boolean).join("\n"),

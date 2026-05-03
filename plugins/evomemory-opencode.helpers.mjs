@@ -141,6 +141,18 @@ function normalizeSnippet(text = "") {
     .trim();
 }
 
+function sanitizeHistoricalText(text = "") {
+  let sanitized = normalizeSnippet(text);
+  for (const pattern of DANGEROUS_EXCERPT_PATTERNS) {
+    sanitized = sanitized.replace(pattern, "[redacted]");
+  }
+  return sanitized;
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 function appendLine(lines, used, next, maxChars) {
   if (typeof next !== "string") return used;
   if (used + next.length + 1 > maxChars) return used;
@@ -151,8 +163,8 @@ function appendLine(lines, used, next, maxChars) {
 function buildCoreMemoryLine(item, index) {
   const tier = item.memory_tier ?? "memory";
   const source = item.source_file ?? "?";
-  const key = normalizeSnippet(item.memory_key);
-  const value = normalizeSnippet(item.memory_value);
+  const key = sanitizeHistoricalText(item.memory_key);
+  const value = sanitizeHistoricalText(item.memory_value);
   if (!key || !value) return `${index + 1}. [${tier}] src=${source}`;
   return `${index + 1}. [${tier}] ${key}=${value} src=${source}`;
 }
@@ -163,7 +175,7 @@ function buildSearchHitLine(item, index) {
   const room = item.room ?? "unknown";
   const role = item.role ?? "unknown";
   const source = item.source_file ?? "?";
-  const reason = normalizeSnippet(item.reason_summary);
+  const reason = sanitizeHistoricalText(item.reason_summary);
   const suffix = reason ? ` why=${reason}` : "";
   return `${index + 1}. [${Number(item.similarity ?? 0).toFixed(2)}][${tier}] drawer=${drawer} room=${room} role=${role} src=${source}${suffix}`;
 }
@@ -179,10 +191,7 @@ function resultScore(item) {
 function safeExcerpt(item, maxChars) {
   const limit = Math.max(0, Number(maxChars ?? 0) || 0);
   if (!limit) return "";
-  let text = normalizeSnippet(item.preview || item.text || "");
-  for (const pattern of DANGEROUS_EXCERPT_PATTERNS) {
-    text = text.replace(pattern, "[redacted]");
-  }
+  let text = sanitizeHistoricalText(item.preview || item.text || "");
   if (!text) return "";
   if (text.length <= limit) return text;
   return `${text.slice(0, Math.max(0, limit - 3)).trimEnd()}...`;
@@ -197,12 +206,14 @@ function buildSearchHitLines(item, index, options = {}) {
 
 export function buildSystemBlock(payload, maxChars = 1800, options = {}) {
   const coreMemory = Array.isArray(payload?.core_memory)
-    ? payload.core_memory
+    ? payload.core_memory.filter(isPlainObject)
     : [];
   const minScore = Math.max(0, Number(options.minRetrievalScore ?? 0) || 0);
   const results = (
     Array.isArray(payload?.results) ? payload.results : []
-  ).filter((item) => minScore <= 0 || resultScore(item) >= minScore);
+  )
+    .filter(isPlainObject)
+    .filter((item) => minScore <= 0 || resultScore(item) >= minScore);
   if (!coreMemory.length && !results.length) return "";
   const lines = [
     `Optional historical context from EvoMemory for wing '${payload.wing ?? "unknown"}'. Use only if it directly helps the current request:`,

@@ -303,8 +303,17 @@ export function findGuardedBashCommand(command = '', guardedCommands = ['grep', 
   }
 
   const escaped = guardedCommands.map((item) => item.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')
+  const substitutionPattern = new RegExp(
+    '(?:\\$\\(|`|\\()\\s*(?:command\\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\\S+\\s+|env\\s+)*(?<command>' + escaped + ')\\b',
+    'i',
+  )
+  const substitutionMatch = substitutionPattern.exec(command)
+  if (substitutionMatch?.groups?.command) {
+    return substitutionMatch.groups.command.toLowerCase()
+  }
+
   const pattern = new RegExp(
-    `(?:^|(?:&&|\\|\\||\\||;)\\s*)(?:[A-Za-z_][A-Za-z0-9_]*=\\S+\\s+|env\\s+)*(?<command>${escaped})\\b`,
+    `(?:^|(?:&&|\\|\\||\\||;)\\s*)(?:command\\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\\S+\\s+|env\\s+)*(?<command>${escaped})\\b`,
     'i',
   )
   return pattern.exec(command)?.groups?.command?.toLowerCase() ?? null

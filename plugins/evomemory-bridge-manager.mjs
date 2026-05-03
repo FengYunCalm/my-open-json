@@ -179,12 +179,17 @@ async function startManagedBridge(config, client, dependencies = {}) {
 }
 
 async function startDirectBridge(config, client, dependencies = {}) {
-  const launch = buildDirectBridgeLaunch(
-    config,
-    dependencies.env ?? process.env,
-  );
-  if (!launch) return false;
   const logImpl = dependencies.logImpl ?? defaultLog;
+  let launch;
+  try {
+    launch = buildDirectBridgeLaunch(config, dependencies.env ?? process.env);
+  } catch (error) {
+    await logImpl(client, "warn", "Failed to prepare direct bridge fallback", {
+      error: String(error),
+    });
+    return false;
+  }
+  if (!launch) return false;
   await logImpl(
     client,
     "debug",

@@ -100,6 +100,13 @@ const STOP_WORDS = new Set([
   "它们",
 ]);
 
+const DANGEROUS_PROMPT_PATTERNS = [
+  /ignore\s+(all\s+)?previous\s+instructions?/gi,
+  /reveal\s+(secrets?|tokens?|credentials?)/gi,
+  /system\s+prompt/gi,
+  /developer\s+(message|instructions?)/gi,
+];
+
 const QUERY_EXPANSION_RULES = [
   {
     pattern: /(方案|计划|实施步骤|任务拆解|实施)/,
@@ -252,6 +259,19 @@ const tokenize = createTokenizer({
 
 function stripCodeBlocks(text) {
   return text.replace(/```[\s\S]*?```/g, " ");
+}
+
+function sanitizePromptText(text = "") {
+  let sanitized = String(text ?? "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[`]/g, "")
+    .replace(/\b(?:system|developer|assistant|user)\s*:/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  for (const pattern of DANGEROUS_PROMPT_PATTERNS) {
+    sanitized = sanitized.replace(pattern, "[redacted]");
+  }
+  return sanitized;
 }
 
 function collectAncestorDirs(directory = "", worktree = "") {
@@ -430,7 +450,7 @@ function firstMeaningfulLine(text) {
 }
 
 function truncate(text, limit = 180) {
-  const trimmed = text.trim();
+  const trimmed = sanitizePromptText(text);
   if (trimmed.length <= limit) return trimmed;
   return `${trimmed.slice(0, limit - 1).trimEnd()}…`;
 }
