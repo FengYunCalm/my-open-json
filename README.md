@@ -11,6 +11,14 @@ are intentionally kept out of git.
 - `mcp/`: local MCP helpers and integration code
 - `package.json` and `package-lock.json`: dependency manifests for local tooling
 
+## Directory boundaries
+
+- Keep OpenCode-standard directories such as `plugins/`, `skills/`, and
+  `commands/` at the config root so OpenCode can discover them.
+- Keep local MCP helper source under `mcp/`.
+- Do not move runtime state, caches, logs, or generated databases into tracked
+  source directories.
+
 ## Ignored runtime data
 
 The repository does not track runtime-only files such as logs, caches, sqlite
