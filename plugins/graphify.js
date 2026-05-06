@@ -20,3 +20,8 @@ export const GraphifyPlugin = async ({ directory }) => {
     },
   };
 };
+
+export default {
+  id: "graphify",
+  server: GraphifyPlugin,
+};

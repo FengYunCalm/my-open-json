@@ -788,3 +788,8 @@ export const EvomemoryOpencodePlugin = async ({
     },
   };
 };
+
+export default {
+  id: "evomemory-opencode",
+  server: EvomemoryOpencodePlugin,
+};

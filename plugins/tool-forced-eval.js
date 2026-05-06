@@ -1522,3 +1522,8 @@ export const ToolForcedEvalPlugin = async ({
     },
   };
 };
+
+export default {
+  id: "tool-forced-eval",
+  server: ToolForcedEvalPlugin,
+};
