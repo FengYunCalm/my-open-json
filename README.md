@@ -23,7 +23,7 @@ are intentionally kept out of git.
 
 The repository does not track runtime-only files such as logs, caches, sqlite
 databases, local state snapshots, or machine-local OpenCode config files such as
-`opencode.json` and `dcp.jsonc`.
+`opencode.json`.
 
 ## Local setup
 

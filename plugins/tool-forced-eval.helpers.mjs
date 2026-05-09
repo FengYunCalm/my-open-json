@@ -94,6 +94,11 @@ const REASONING_HINTS = [
   /(方案|设计|架构|取舍|比较|为什么|排查|审查|重构)/,
 ]
 
+const NONTRIVIAL_LOCAL_CODE_HINTS = [
+  /\b(debug|bug|failure|failing|regression|review|audit|refactor|architecture|design|plan|implement|change|fix|cross[- ]file|multi[- ]file)\b/i,
+  /(排查|报错|失败|故障|回归|审查|审计|重构|架构|设计|方案|实现|修改|修复|多文件|跨文件)/,
+]
+
 const INTENT_LABELS = {
   'memory-maintenance': 'memory-maintenance',
   'history': 'history',
@@ -144,6 +149,15 @@ function matchesAny(patterns, text) {
 
 export function isProjectContextTask(text = '') {
   return matchesAny(PROJECT_CONTEXT_HINTS, text)
+}
+
+function shouldPreferEvomemory(text = '', intentKey = 'unclear') {
+  if (['memory-maintenance', 'history'].includes(intentKey)) return true
+  if (isProjectContextTask(text)) return true
+  if (['local-code', 'reasoning'].includes(intentKey)) {
+    return matchesAny(NONTRIVIAL_LOCAL_CODE_HINTS, text)
+  }
+  return false
 }
 
 export function classifyIntent(text = '') {
@@ -224,12 +238,13 @@ export function buildTaskRouting(text = '', visibleMcpCatalog = [], config = {},
   const mcpCatalog = normalizeMcpCatalog(visibleMcpCatalog)
   const shortlistLimit = config.shortlistLimit ?? 3
   const projectContextTask = isProjectContextTask(text)
-  const mcpShortlistLimit = projectContextTask ? 2 : 1
+  const preferEvomemory = shouldPreferEvomemory(text, intent.key)
+  const mcpShortlistLimit = preferEvomemory ? 2 : 1
   const nativeTools = []
   const rankedMcps = rankMcpRecommendations(text, mcpCatalog, { limit: mcpShortlistLimit, intentKey: intent.key })
   const evomemoryEntry = mcpCatalog.find((entry) => entry.name === 'evomemory')
-  const projectContextMcps = (() => {
-    if (!projectContextTask || !evomemoryEntry || rankedMcps.some((mcp) => mcp.name === 'evomemory')) {
+  const evomemoryAwareMcps = (() => {
+    if (!preferEvomemory || !evomemoryEntry || rankedMcps.some((mcp) => mcp.name === 'evomemory')) {
       return rankedMcps
     }
     const [evomemoryMcp] = rankMcpRecommendations(text, [evomemoryEntry], { limit: 1, intentKey: 'history' })
@@ -237,7 +252,7 @@ export function buildTaskRouting(text = '', visibleMcpCatalog = [], config = {},
     if (rankedMcps.length >= mcpShortlistLimit) return [rankedMcps[0], evomemoryMcp]
     return [...rankedMcps, evomemoryMcp]
   })()
-  const mcps = dedupeByName(projectContextMcps).slice(0, mcpShortlistLimit)
+  const mcps = dedupeByName(evomemoryAwareMcps).slice(0, mcpShortlistLimit)
   const skills = detectSkillRecommendations(text, shortlistLimit, skillCatalog, intent.key)
 
   let summary = 'No single tool family is clearly dominant. Prefer the smallest correct tool or skill for the task.'

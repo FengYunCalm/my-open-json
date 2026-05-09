@@ -125,6 +125,14 @@ test('builds a short routed recommendation set', () => {
   assert.deepEqual(projectLearningRouting.nativeTools.map((item) => item.name), ['glob', 'grep', 'read'])
   assert.ok(projectLearningRouting.mcps.some((item) => item.name === 'evomemory'))
 
+  const nontrivialCodeRouting = buildTaskRouting('debug this cross-file regression in the plugin implementation', mcpCatalog, { shortlistLimit: 3 }, catalog)
+  assert.equal(nontrivialCodeRouting.intent.key, 'local-code')
+  assert.ok(nontrivialCodeRouting.mcps.some((item) => item.name === 'evomemory'))
+
+  const reasoningRouting = buildTaskRouting('compare the architecture tradeoffs before this refactor', mcpCatalog, { shortlistLimit: 3 }, catalog)
+  assert.equal(reasoningRouting.intent.key, 'reasoning')
+  assert.ok(reasoningRouting.mcps.some((item) => item.name === 'evomemory'))
+
   const narrowCurrentCodeRouting = buildTaskRouting('please explain the current implementation in plugins/tool-forced-eval.js', mcpCatalog, { shortlistLimit: 3 }, catalog)
   assert.equal(narrowCurrentCodeRouting.intent.key, 'local-code')
   assert.ok(!narrowCurrentCodeRouting.mcps.some((item) => item.name === 'evomemory'))
@@ -254,6 +262,28 @@ test('detects relevant skill recommendations', () => {
 
   const locatorSkills = buildTaskRouting('find the call site for this function', [], { shortlistLimit: 3 }, catalog).skills
   assert.equal(locatorSkills[0]?.name, 'code-locator')
+})
+
+test('keeps lower-confidence skill matches visible for gating', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tool-forced-eval-low-confidence-skill-'))
+  const skillRoot = path.join(tempRoot, 'skills')
+  fs.mkdirSync(skillRoot)
+
+  writeSkill(
+    skillRoot,
+    'api-auditor',
+    'Use when auditing API consistency, surface design, and request/response shape.',
+  )
+  writeSkill(
+    skillRoot,
+    'refactor',
+    'Use when existing code needs maintainability improvements without intentionally changing behavior.',
+  )
+
+  const catalog = loadSkillCatalog([tempRoot])
+  const skills = buildTaskRouting('audit this api surface', [], { shortlistLimit: 3 }, catalog).skills
+
+  assert.equal(skills[0]?.name, 'api-auditor')
 })
 
 test('filters out weak skill matches', () => {

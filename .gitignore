@@ -28,4 +28,3 @@ mcp/evomemory.egg-info/
 bun.lock
 .worktrees/
 opencode.json
-dcp.jsonc

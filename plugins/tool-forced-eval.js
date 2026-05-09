@@ -23,9 +23,9 @@ const MARKER = "<OPENCODE_TOOL_FORCED_EVAL>";
 const KNOWN_CONFIG_FILES = ["opencode.json", "opencode.jsonc"];
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_CONFIG_PATH = path.join(__dirname, "tool-forced-eval.config.json");
-const STRONG_SKILL_SCORE_THRESHOLD = 4;
-const MEDIUM_SKILL_SCORE_THRESHOLD = 2.5;
-const SKILL_LEAD_DELTA_THRESHOLD = 1.25;
+const STRONG_SKILL_SCORE_THRESHOLD = 3;
+const MEDIUM_SKILL_SCORE_THRESHOLD = 1.75;
+const SKILL_LEAD_DELTA_THRESHOLD = 0.75;
 const REPEATED_SKILL_NUDGE_THRESHOLD = 2;
 const STRONG_MCP_SCORE_THRESHOLD = 4;
 const REPEATED_MCP_NUDGE_THRESHOLD = 2;
@@ -52,7 +52,7 @@ const DEFAULT_CONFIG = {
 const TOOL_DESCRIPTION_HINTS = [
   {
     match: (toolID) => toolID === "evomemory_search_context",
-    note: "Prefer this early in non-trivial project onboarding, audits, architecture reviews, and cross-file changes when prior decisions, stable constraints, earlier fixes, or historical feedback may matter. Current files remain the source of truth.",
+    note: "Prefer this early in non-trivial project onboarding, audits, architecture reviews, cross-file changes, debugging, refactors, or local code work where prior decisions, stable constraints, earlier fixes, or historical feedback may matter. Current files remain the source of truth.",
   },
   {
     match: (toolID) => toolID === "evomemory_record_feedback",
@@ -93,7 +93,7 @@ const TOOL_DESCRIPTION_HINTS = [
   },
   {
     match: (toolID) => toolID.startsWith("evomemory_"),
-    note: "Prefer this when the task needs project history, prior decisions, stable preferences, governance constraints, feedback, benchmark results, or historical context for project learning and audits. Automatic plugin injection may have already added some context, but that is not guaranteed. This does not replace reading current code or docs when those are the source of truth.",
+    note: "Prefer this when the task may benefit from project history, prior decisions, stable preferences, governance constraints, feedback, benchmark results, debugging history, or historical context for project learning, audits, refactors, and cross-file local code work. Automatic plugin injection may have already added some context, but that is not guaranteed. This does not replace reading current code or docs when those are the source of truth.",
   },
 ];
 

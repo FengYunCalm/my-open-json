@@ -333,6 +333,28 @@ test("routes history, docs, and GitHub pattern tasks to the right MCP shortlists
   assert.match(codeInjected, /Detected intent: `local-code`/);
   assert.match(codeInjected, /- `glob`:/);
   assert.doesNotMatch(codeInjected, /`evomemory_\*`/);
+
+  await plugin["chat.message"](
+    { sessionID: "session-nontrivial-code" },
+    {
+      message: { parts: [] },
+      parts: [
+        {
+          type: "text",
+          text: "debug this cross-file regression in the plugin implementation",
+        },
+      ],
+    },
+  );
+  const nontrivialCodeOutput = { system: [] };
+  await plugin["experimental.chat.system.transform"](
+    { sessionID: "session-nontrivial-code", model: {} },
+    nontrivialCodeOutput,
+  );
+  const nontrivialCodeInjected = nontrivialCodeOutput.system.at(-1) ?? "";
+  assert.match(nontrivialCodeInjected, /Detected intent: `local-code`/);
+  assert.match(nontrivialCodeInjected, /### EvoMemory Priority/);
+  assert.match(nontrivialCodeInjected, /`evomemory_\*`/);
 });
 
 test("only adds tool guidance for MCPs that still opt in", async () => {
@@ -355,7 +377,7 @@ test("only adds tool guidance for MCPs that still opt in", async () => {
   );
   assert.match(
     evomemoryOutput.description,
-    /Prefer this early in non-trivial project onboarding, audits, architecture reviews, and cross-file changes/i,
+    /Prefer this early in non-trivial project onboarding, audits, architecture reviews, cross-file changes, debugging, refactors, or local code work/i,
   );
 
   const evomemoryFeedbackOutput = {
@@ -1034,7 +1056,63 @@ test("uses a medium skill gate when a likely best-fit skill clearly leads", asyn
 
       const injected = output.system.at(-1) ?? "";
       assert.match(injected, /### Skill Gate/);
-      assert.match(injected, /A likely best-fit skill exists\./);
+      assert.match(injected, /A high-confidence skill match exists\./);
+      assert.match(injected, /`api-auditor`/);
+    },
+  );
+});
+
+test("uses a skill gate for lower-confidence relevant skill matches", async () => {
+  const tempRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "tool-forced-eval-skill-gate-lower-confidence-"),
+  );
+  const home = path.join(tempRoot, "home");
+  const worktree = path.join(tempRoot, "worktree");
+  const directory = path.join(tempRoot, "directory");
+  const skillRoot = path.join(directory, ".opencode", "skills");
+
+  fs.mkdirSync(path.join(home, ".config", "opencode"), { recursive: true });
+  fs.mkdirSync(worktree);
+  fs.mkdirSync(directory);
+  fs.mkdirSync(skillRoot, { recursive: true });
+  writeSkill(
+    skillRoot,
+    "api-auditor",
+    "Use when auditing API consistency, surface design, and request/response shape.",
+  );
+  writeSkill(
+    skillRoot,
+    "refactor",
+    "Use when existing code needs maintainability improvements without intentionally changing behavior.",
+  );
+
+  await withEnv(
+    {
+      HOME: home,
+      OPENCODE_CONFIG: undefined,
+      OPENCODE_CONFIG_DIR: undefined,
+      OPENCODE_CONFIG_CONTENT: undefined,
+    },
+    async () => {
+      const plugin = await createPlugin({ directory, worktree });
+
+      await plugin["chat.message"](
+        { sessionID: "session-skill-gate-lower-confidence" },
+        {
+          message: { parts: [] },
+          parts: [{ type: "text", text: "audit this api surface" }],
+        },
+      );
+
+      const output = { system: [] };
+      await plugin["experimental.chat.system.transform"](
+        { sessionID: "session-skill-gate-lower-confidence", model: {} },
+        output,
+      );
+
+      const injected = output.system.at(-1) ?? "";
+      assert.match(injected, /### Skill Gate/);
+      assert.match(injected, /A high-confidence skill match exists\./);
       assert.match(injected, /`api-auditor`/);
     },
   );
