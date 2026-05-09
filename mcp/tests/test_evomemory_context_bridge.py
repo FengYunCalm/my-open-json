@@ -502,6 +502,29 @@ class FakeBackend:
             invalidated += 1
         return invalidated
 
+    def delete_drawers(self, *, drawer_ids: list[str]) -> int:
+        drawer_id_set = set(drawer_ids)
+        before = len(self.saved_entries)
+        self.saved_entries = [
+            entry
+            for entry in self.saved_entries
+            if entry["drawer_id"] not in drawer_id_set
+        ]
+        return before - len(self.saved_entries)
+
+    def list_stale_drawer_ids(self, *, before: str) -> list[str]:
+        stale = []
+        for entry in self.saved_entries:
+            metadata = entry["metadata"]
+            valid_to = metadata.get("valid_to") or ""
+            reference_at = metadata.get("valid_from") or metadata.get("filed_at") or ""
+            if valid_to and valid_to <= before:
+                stale.append(entry["drawer_id"])
+                continue
+            if reference_at and reference_at <= before and not valid_to:
+                stale.append(entry["drawer_id"])
+        return stale
+
 
 def make_core(**config_overrides) -> tuple[BridgeCore, FakeBackend]:
     backend = FakeBackend()
@@ -885,6 +908,256 @@ def test_backend_keyword_query_uses_fts_index():
     assert [row["memory_key"] for row in rows] == ["git_commit_behavior"]
     assert rows[0]["retrieval_source"] == "keyword"
     assert rows[0]["keyword_rank"] <= 0
+
+
+def test_backend_stale_drawer_listing_returns_historical_and_old_current_ids():
+    class CaptureCollection:
+        def __init__(self):
+            self.ids = []
+            self.documents = []
+            self.metadatas = []
+
+        def upsert(self, *, ids, documents, metadatas):
+            for drawer_id, document, metadata in zip(ids, documents, metadatas):
+                if drawer_id in self.ids:
+                    index = self.ids.index(drawer_id)
+                    self.documents[index] = document
+                    self.metadatas[index] = metadata
+                    continue
+                self.ids.append(drawer_id)
+                self.documents.append(document)
+                self.metadatas.append(metadata)
+
+        def count(self):
+            return len(self.ids)
+
+        def get(self, *, include, limit=20, offset=0, where=None, ids=None):
+            selected_indexes = list(range(len(self.ids)))
+            if ids is not None:
+                selected_indexes = [
+                    index
+                    for index, drawer_id in enumerate(self.ids)
+                    if drawer_id in ids
+                ]
+            elif where and where.get("$and"):
+                selected_indexes = list(range(len(self.ids)))
+            elif where:
+                selected_indexes = list(range(len(self.ids)))
+            selected_indexes = selected_indexes[offset : offset + limit]
+            return {
+                "ids": [self.ids[index] for index in selected_indexes],
+                "documents": [self.documents[index] for index in selected_indexes],
+                "metadatas": [self.metadatas[index] for index in selected_indexes],
+            }
+
+    collection = CaptureCollection()
+    backend = object.__new__(EvoMemoryBackend)
+    backend._collection = collection
+    backend._fts = None
+    backend._fts_synced = False
+    backend.fts_path = None
+
+    old_historical = EvoMemoryBackend.save_entry(
+        backend,
+        wing="opencode",
+        room="opencode-session",
+        content="Assistant:\nHistorical note.",
+        source_file="session:ses_hist",
+        metadata={
+            "valid_from": "2026-01-01T00:00:00+00:00",
+            "valid_to": "2026-01-02T00:00:00+00:00",
+            "filed_at": "2026-01-01T00:00:00+00:00",
+        },
+    )
+    old_current = EvoMemoryBackend.save_entry(
+        backend,
+        wing="opencode",
+        room="opencode-session",
+        content="Assistant:\nOld current note.",
+        source_file="session:ses_current",
+        metadata={
+            "valid_from": "2026-01-03T00:00:00+00:00",
+            "filed_at": "2026-01-03T00:00:00+00:00",
+        },
+    )
+    EvoMemoryBackend.save_entry(
+        backend,
+        wing="opencode",
+        room="opencode-session",
+        content="Assistant:\nFresh current note.",
+        source_file="session:ses_fresh",
+        metadata={
+            "valid_from": "2026-05-01T00:00:00+00:00",
+            "filed_at": "2026-05-01T00:00:00+00:00",
+        },
+    )
+
+    stale = EvoMemoryBackend.list_stale_drawer_ids(
+        backend, before="2026-02-01T00:00:00+00:00"
+    )
+
+    assert stale == [old_historical["drawer_id"], old_current["drawer_id"]]
+
+
+def test_backend_delete_drawers_removes_fts_rows():
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-fts-delete-"))
+
+    class CaptureCollection:
+        def __init__(self):
+            self.ids = []
+            self.documents = []
+            self.metadatas = []
+
+        def upsert(self, *, ids, documents, metadatas):
+            for drawer_id, document, metadata in zip(ids, documents, metadatas):
+                if drawer_id in self.ids:
+                    index = self.ids.index(drawer_id)
+                    self.documents[index] = document
+                    self.metadatas[index] = metadata
+                    continue
+                self.ids.append(drawer_id)
+                self.documents.append(document)
+                self.metadatas.append(metadata)
+
+        def delete(self, ids):
+            keep = [
+                index
+                for index, drawer_id in enumerate(self.ids)
+                if drawer_id not in set(ids)
+            ]
+            self.ids = [self.ids[index] for index in keep]
+            self.documents = [self.documents[index] for index in keep]
+            self.metadatas = [self.metadatas[index] for index in keep]
+
+        def get(self, *, include, limit=20, offset=0, where=None, ids=None):
+            selected_indexes = list(range(len(self.ids)))
+            if ids is not None:
+                selected_indexes = [
+                    index
+                    for index, drawer_id in enumerate(self.ids)
+                    if drawer_id in ids
+                ]
+            selected_indexes = selected_indexes[offset : offset + limit]
+            return {
+                "ids": [self.ids[index] for index in selected_indexes],
+                "documents": [self.documents[index] for index in selected_indexes],
+                "metadatas": [self.metadatas[index] for index in selected_indexes],
+            }
+
+    collection = CaptureCollection()
+    backend = object.__new__(EvoMemoryBackend)
+    backend._collection = collection
+    backend.fts_path = str(temp_dir / "fts.sqlite3")
+    backend._fts = None
+    backend._fts_synced = False
+
+    saved = EvoMemoryBackend.save_entry(
+        backend,
+        wing="opencode",
+        room="opencode-session",
+        content="Assistant: git commit retention note.",
+        source_file="session:ses_delete",
+        metadata={"valid_from": "2026-01-01T00:00:00+00:00"},
+    )
+    assert EvoMemoryBackend.keyword_query_drawers(
+        backend,
+        query="git commit",
+        limit=5,
+    )
+
+    deleted_count = EvoMemoryBackend.delete_drawers(
+        backend, drawer_ids=[saved["drawer_id"], saved["drawer_id"]]
+    )
+
+    assert deleted_count == 1
+    assert (
+        EvoMemoryBackend.keyword_query_drawers(
+            backend,
+            query="git commit",
+            limit=5,
+        )
+        == []
+    )
+
+
+def test_backend_delete_drawers_reports_primary_delete_even_if_fts_cleanup_fails():
+    class CaptureCollection:
+        def __init__(self):
+            self.ids = []
+            self.documents = []
+            self.metadatas = []
+
+        def upsert(self, *, ids, documents, metadatas):
+            for drawer_id, document, metadata in zip(ids, documents, metadatas):
+                if drawer_id in self.ids:
+                    index = self.ids.index(drawer_id)
+                    self.documents[index] = document
+                    self.metadatas[index] = metadata
+                    continue
+                self.ids.append(drawer_id)
+                self.documents.append(document)
+                self.metadatas.append(metadata)
+
+        def delete(self, ids):
+            keep = [
+                index
+                for index, drawer_id in enumerate(self.ids)
+                if drawer_id not in set(ids)
+            ]
+            self.ids = [self.ids[index] for index in keep]
+            self.documents = [self.documents[index] for index in keep]
+            self.metadatas = [self.metadatas[index] for index in keep]
+
+        def count(self):
+            return len(self.ids)
+
+        def get(self, *, include, limit=20, offset=0, where=None, ids=None):
+            selected_indexes = list(range(len(self.ids)))
+            if ids is not None:
+                selected_indexes = [
+                    index
+                    for index, drawer_id in enumerate(self.ids)
+                    if drawer_id in ids
+                ]
+            selected_indexes = selected_indexes[offset : offset + limit]
+            return {
+                "ids": [self.ids[index] for index in selected_indexes],
+                "documents": [self.documents[index] for index in selected_indexes],
+                "metadatas": [self.metadatas[index] for index in selected_indexes],
+            }
+
+    class BrokenFtsConnection:
+        def executemany(self, _sql, _params):
+            raise sqlite3.OperationalError("fts delete failed")
+
+        def commit(self):
+            raise AssertionError("commit should not run after executemany failure")
+
+    collection = CaptureCollection()
+    backend = object.__new__(EvoMemoryBackend)
+    backend._collection = collection
+    backend._fts = None
+    backend._fts_synced = False
+    backend.fts_path = None
+
+    saved = EvoMemoryBackend.save_entry(
+        backend,
+        wing="opencode",
+        room="opencode-session",
+        content="Assistant: delete survives broken fts cleanup.",
+        source_file="session:ses_delete_broken_fts",
+        metadata={"valid_from": "2026-01-01T00:00:00+00:00"},
+    )
+    backend._fts = BrokenFtsConnection()
+    backend._fts_synced = True
+
+    deleted_count = EvoMemoryBackend.delete_drawers(
+        backend, drawer_ids=[saved["drawer_id"]]
+    )
+
+    assert deleted_count == 1
+    assert backend._fts_synced is False
+    assert collection.ids == []
 
 
 def test_mcp_search_returns_navigation_metadata_and_preview():

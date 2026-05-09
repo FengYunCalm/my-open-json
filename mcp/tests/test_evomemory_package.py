@@ -124,6 +124,28 @@ class PromotionBackend:
             invalidated += 1
         return invalidated
 
+    def delete_drawers(self, *, drawer_ids):
+        ids = list(dict.fromkeys(drawer_ids))
+        id_set = set(ids)
+        before = len(self.saved_entries)
+        self.saved_entries = [
+            entry for entry in self.saved_entries if entry["drawer_id"] not in id_set
+        ]
+        return before - len(self.saved_entries)
+
+    def list_stale_drawer_ids(self, *, before):
+        result = []
+        for entry in self.saved_entries:
+            metadata = entry["metadata"]
+            valid_to = metadata.get("valid_to") or ""
+            reference_at = metadata.get("valid_from") or metadata.get("filed_at") or ""
+            if valid_to and valid_to <= before:
+                result.append(entry["drawer_id"])
+                continue
+            if reference_at and reference_at <= before and not valid_to:
+                result.append(entry["drawer_id"])
+        return result
+
     def status(self):
         return {"total_drawers": len(self.saved_entries), "palace_path": "/tmp/palace"}
 
@@ -2973,6 +2995,224 @@ def test_governance_queries_support_scope_and_stale_filters():
     assert project_capsules["count"] == 1
     assert project_capsules["capsules"][0]["scope"] == "project"
     assert project_capsules["capsules"][0]["is_stale"] is False
+
+
+def test_retention_dry_run_reports_candidates_without_deleting_current_or_referenced_drawers():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-retention-dry-run-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+
+    backend = core.repository.backend
+    backend.save_entry(
+        wing="opencode",
+        room="opencode-session",
+        content="User:\n以后都用中文回复",
+        source_file="session:ses_retention",
+        metadata={
+            "session_id": "ses_retention",
+            "message_id": "msg_retention_hist",
+            "role": "user",
+            "memory_tier": "user_preference",
+            "memory_key": "response_language",
+            "memory_value": "zh-cn",
+            "valid_from": "2026-01-01T00:00:00+00:00",
+            "valid_to": "2026-01-02T00:00:00+00:00",
+            "filed_at": "2026-01-01T00:00:00+00:00",
+        },
+    )
+    referenced = backend.save_entry(
+        wing="opencode",
+        room="opencode-session",
+        content="User:\n这个项目里不要自动提交 git commit",
+        source_file="session:ses_retention",
+        metadata={
+            "session_id": "ses_retention",
+            "message_id": "msg_retention_ref",
+            "role": "user",
+            "memory_tier": "project_memory",
+            "memory_key": "git_commit_behavior",
+            "memory_value": "disabled",
+            "valid_from": "2026-01-03T00:00:00+00:00",
+            "filed_at": "2026-01-03T00:00:00+00:00",
+        },
+    )
+    core.promoter.promote_saved_memory(
+        scope="project",
+        memory_tier="project_memory",
+        memory_key="git_commit_behavior",
+        memory_value="disabled",
+        source_session="ses_retention",
+        source_message_id="msg_retention_ref",
+        source_record_id=referenced["drawer_id"],
+        valid_from="2026-01-03T00:00:00+00:00",
+        initial_source_count=2,
+    )
+    backend.save_entry(
+        wing="opencode",
+        room="opencode-session",
+        content="Assistant:\nWorking note kept current.",
+        source_file="session:ses_retention",
+        metadata={
+            "session_id": "ses_retention",
+            "message_id": "msg_retention_current",
+            "role": "assistant",
+            "memory_tier": "working_session",
+            "valid_from": "2026-01-04T00:00:00+00:00",
+            "filed_at": "2026-01-04T00:00:00+00:00",
+        },
+    )
+
+    result = core.evomemory_run_retention(
+        dry_run=True,
+        safe=True,
+        window_days=30,
+    )
+
+    assert result["dry_run"] is True
+    assert result["safe"] is True
+    assert result["candidate_count"] == 3
+    assert result["protected_current_count"] == 2
+    assert result["protected_referenced_count"] == 1
+    assert result["purgeable_count"] == 1
+    assert result["deleted_count"] == 0
+    assert len(backend.saved_entries) == 3
+
+
+def test_retention_safe_purge_deletes_only_unreferenced_historical_drawers():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-retention-safe-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+
+    backend = core.repository.backend
+    historical = backend.save_entry(
+        wing="opencode",
+        room="opencode-session",
+        content="User:\n以后都用中文回复",
+        source_file="session:ses_retention_safe",
+        metadata={
+            "session_id": "ses_retention_safe",
+            "message_id": "msg_retention_safe_hist",
+            "role": "user",
+            "memory_tier": "user_preference",
+            "memory_key": "response_language",
+            "memory_value": "zh-cn",
+            "valid_from": "2026-01-01T00:00:00+00:00",
+            "valid_to": "2026-01-02T00:00:00+00:00",
+            "filed_at": "2026-01-01T00:00:00+00:00",
+        },
+    )
+    referenced = backend.save_entry(
+        wing="opencode",
+        room="opencode-session",
+        content="User:\n这个项目里不要自动提交 git commit",
+        source_file="session:ses_retention_safe",
+        metadata={
+            "session_id": "ses_retention_safe",
+            "message_id": "msg_retention_safe_ref",
+            "role": "user",
+            "memory_tier": "project_memory",
+            "memory_key": "git_commit_behavior",
+            "memory_value": "disabled",
+            "valid_from": "2026-01-03T00:00:00+00:00",
+            "valid_to": "2026-01-04T00:00:00+00:00",
+            "filed_at": "2026-01-03T00:00:00+00:00",
+        },
+    )
+    core.promoter.promote_saved_memory(
+        scope="project",
+        memory_tier="project_memory",
+        memory_key="git_commit_behavior",
+        memory_value="disabled",
+        source_session="ses_retention_safe",
+        source_message_id="msg_retention_safe_ref",
+        source_record_id=referenced["drawer_id"],
+        valid_from="2026-01-05T00:00:00+00:00",
+        initial_source_count=2,
+    )
+
+    result = core.evomemory_run_retention(dry_run=False, safe=True, window_days=30)
+    remaining_ids = {entry["drawer_id"] for entry in backend.saved_entries}
+
+    assert result["deleted_count"] == 1
+    assert result["deleted_drawer_ids"] == [historical["drawer_id"]]
+    assert historical["drawer_id"] not in remaining_ids
+    assert referenced["drawer_id"] in remaining_ids
+
+
+def test_retention_can_purge_old_current_drawers_when_safe_mode_is_disabled():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-retention-unsafe-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+
+    backend = core.repository.backend
+    current = backend.save_entry(
+        wing="opencode",
+        room="opencode-session",
+        content="Assistant:\nOld working session note.",
+        source_file="session:ses_retention_unsafe",
+        metadata={
+            "session_id": "ses_retention_unsafe",
+            "message_id": "msg_retention_unsafe_current",
+            "role": "assistant",
+            "memory_tier": "working_session",
+            "valid_from": "2026-01-01T00:00:00+00:00",
+            "filed_at": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    result = core.evomemory_run_retention(dry_run=False, safe=False, window_days=30)
+
+    assert result["safe"] is False
+    assert result["deleted_drawer_ids"] == [current["drawer_id"]]
+    assert core.repository.get_drawer(current["drawer_id"]) is None
+
+
+def test_maintenance_summary_exposes_retention_runtime_fields():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-retention-summary-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+
+    backend = core.repository.backend
+    backend.save_entry(
+        wing="opencode",
+        room="opencode-session",
+        content="Assistant:\nHistorical summary.",
+        source_file="session:ses_retention_summary",
+        metadata={
+            "session_id": "ses_retention_summary",
+            "message_id": "msg_retention_summary",
+            "role": "assistant",
+            "memory_tier": "working_session",
+            "valid_from": "2026-01-01T00:00:00+00:00",
+            "valid_to": "2026-01-02T00:00:00+00:00",
+            "filed_at": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    before = core.evomemory_run_retention(dry_run=True, safe=True, window_days=30)
+    after = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+    summary = after.maintenance_summary()
+
+    assert before["maintenance_summary"]["last_retention_at"] is not None
+    assert (
+        summary["last_retention_at"]
+        == before["maintenance_summary"]["last_retention_at"]
+    )
+    assert summary["last_retention_window_days"] == 30
+    assert summary["last_retention_candidate_count"] == 1
+    assert summary["last_retention_purgeable_count"] == 1
+    assert summary["last_retention_deleted_count"] == 0
+    assert summary["last_retention_safe"] is True
+    assert summary["last_retention_dry_run"] is True
+    assert summary["updated_at"] == summary["last_retention_at"]
 
 
 def test_canonical_modules_live_under_evomemory_namespace():

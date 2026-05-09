@@ -46,6 +46,7 @@ from evomemory.domain.memory_policy import (
 )
 from evomemory.context.query_service import ContextQueryService
 from evomemory.context.archive_service import MemoryArchiveService
+from evomemory.context.retention_service import ContextRetentionService
 from evomemory.context.retrieval_service import ContextRetrievalService
 from evomemory.context.repository import ContextRepository
 from evomemory.context.session_service import SessionLifecycleService
@@ -99,6 +100,14 @@ def _default_runtime_state() -> dict[str, Any]:
         "last_reconcile_stale_belief_count": 0,
         "last_reconcile_gene_count": 0,
         "last_reconcile_capsule_count": 0,
+        "last_retention_at": None,
+        "last_retention_before": None,
+        "last_retention_window_days": 0,
+        "last_retention_candidate_count": 0,
+        "last_retention_purgeable_count": 0,
+        "last_retention_deleted_count": 0,
+        "last_retention_safe": None,
+        "last_retention_dry_run": None,
         "last_maintenance_at": None,
         "last_maintenance_profile": None,
     }
@@ -295,6 +304,8 @@ class BridgeConfig:
     min_meaningful_chars: int = 6
     working_session_compact_threshold: int = 8
     working_session_retain_count: int = 4
+    retention_window_days: int = 90
+    retention_safe_default: bool = True
 
     def __post_init__(self):
         self.palace_path = str(_resolve_palace_path(self.palace_path))
@@ -869,6 +880,46 @@ class EvoMemoryBackend:
                 self._fts_upsert(drawer_id, document, metadata)
         return len(update_ids)
 
+    def delete_drawers(self, *, drawer_ids: list[str]) -> int:
+        if not drawer_ids:
+            return 0
+        unique_ids = list(dict.fromkeys(drawer_ids))
+        try:
+            collection = self._collection_for()
+            collection.delete(ids=unique_ids)
+        except Exception:
+            return 0
+        self._fts_synced = False
+        conn = self._fts_for()
+        if conn is not None:
+            try:
+                conn.executemany(
+                    "DELETE FROM drawers_fts WHERE drawer_id = ?",
+                    [(did,) for did in unique_ids],
+                )
+                conn.commit()
+            except Exception:
+                pass
+        return len(unique_ids)
+
+    def list_stale_drawer_ids(self, *, before: str) -> list[str]:
+        try:
+            result = self._get_all(include=["metadatas"])
+        except Exception:
+            return []
+        ids = result.get("ids", [])
+        metadatas = result.get("metadatas", [])
+        stale: list[str] = []
+        for drawer_id, item in zip(ids, metadatas):
+            valid_to = item.get("valid_to") or ""
+            reference_at = item.get("valid_from") or item.get("filed_at") or ""
+            if valid_to and valid_to <= before:
+                stale.append(drawer_id)
+                continue
+            if reference_at and reference_at <= before and not valid_to:
+                stale.append(drawer_id)
+        return [did for did in stale if did]
+
     def status(self):
         try:
             collection = self._collection_for()
@@ -1197,6 +1248,7 @@ class BridgeCore:
         self.sanitize_optional_memory_tier = _sanitize_optional_memory_tier
         self.global_memory_wing = GLOBAL_MEMORY_WING
         self.archive_service = MemoryArchiveService(self)
+        self.retention_service = ContextRetentionService(self)
         self.retrieval_service = ContextRetrievalService(self)
         self.timeline_service = MemoryTimelineService(self)
         self.session_service = SessionLifecycleService(self)
@@ -1759,6 +1811,7 @@ class BridgeCore:
             [
                 timestamp
                 for timestamp in [
+                    self.runtime.get("last_retention_at"),
                     self.runtime.get("last_revision_at"),
                     self.runtime.get("last_reconcile_at"),
                     self.runtime.get("last_maintenance_at"),
@@ -1785,6 +1838,22 @@ class BridgeCore:
             "stale_capsule_count": int(
                 governance_status.get("stale_capsule_count") or 0
             ),
+            "last_retention_at": self.runtime.get("last_retention_at"),
+            "last_retention_before": self.runtime.get("last_retention_before"),
+            "last_retention_window_days": int(
+                self.runtime.get("last_retention_window_days") or 0
+            ),
+            "last_retention_candidate_count": int(
+                self.runtime.get("last_retention_candidate_count") or 0
+            ),
+            "last_retention_purgeable_count": int(
+                self.runtime.get("last_retention_purgeable_count") or 0
+            ),
+            "last_retention_deleted_count": int(
+                self.runtime.get("last_retention_deleted_count") or 0
+            ),
+            "last_retention_safe": self.runtime.get("last_retention_safe"),
+            "last_retention_dry_run": self.runtime.get("last_retention_dry_run"),
             "updated_at": updated_at,
             "last_revision_at": self.runtime.get("last_revision_at"),
             "last_revision_revised_count": int(
@@ -1812,6 +1881,19 @@ class BridgeCore:
             "last_maintenance_at": self.runtime.get("last_maintenance_at"),
             "last_maintenance_profile": self.runtime.get("last_maintenance_profile"),
         }
+
+    def evomemory_run_retention(
+        self,
+        *,
+        dry_run: bool = True,
+        safe: bool | None = None,
+        window_days: int | None = None,
+    ) -> dict[str, Any]:
+        return self.retention_service.run_retention(
+            dry_run=dry_run,
+            safe=safe,
+            window_days=window_days,
+        )
 
     def evomemory_query_beliefs(
         self,

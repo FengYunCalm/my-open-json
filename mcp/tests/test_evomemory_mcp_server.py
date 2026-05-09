@@ -401,6 +401,28 @@ class FakeCore:
             "benchmark": None,
         }
 
+    def evomemory_run_retention(self, dry_run=True, safe=None, window_days=None):
+        self.calls.append(
+            (
+                "evomemory_run_retention",
+                {
+                    "dry_run": dry_run,
+                    "safe": safe,
+                    "window_days": window_days,
+                },
+            )
+        )
+        return {
+            "service": "evomemory",
+            "plane": "maintenance",
+            "dry_run": dry_run,
+            "safe": safe,
+            "window_days": window_days,
+            "candidate_count": 0,
+            "purgeable_count": 0,
+            "deleted_count": 0,
+        }
+
     def evomemory_reconcile_governance(self):
         self.calls.append(("evomemory_reconcile_governance", {}))
         return {
@@ -434,6 +456,14 @@ class FakeCore:
             "last_reconcile_stale_belief_count": 0,
             "last_reconcile_gene_count": 0,
             "last_reconcile_capsule_count": 0,
+            "last_retention_at": None,
+            "last_retention_before": None,
+            "last_retention_window_days": 0,
+            "last_retention_candidate_count": 0,
+            "last_retention_purgeable_count": 0,
+            "last_retention_deleted_count": 0,
+            "last_retention_safe": None,
+            "last_retention_dry_run": None,
         }
 
     def evomemory_export_snapshot(self, limit=20):
@@ -621,6 +651,30 @@ def test_internal_maintenance_run_route_forwards_parameters():
     assert core.calls[0][1]["profile"] == "full"
     assert core.calls[0][1]["min_confidence"] == 0.75
     assert core.calls[0][1]["limit"] == 10
+
+
+def test_internal_retention_route_forwards_parameters():
+    core = FakeCore()
+    client = TestClient(create_app(core))
+
+    response = client.post(
+        "/internal/maintenance/retention",
+        json={
+            "dry_run": False,
+            "safe": True,
+            "window_days": 45,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["dry_run"] is False
+    assert payload["safe"] is True
+    assert payload["window_days"] == 45
+    assert core.calls[0][0] == "evomemory_run_retention"
+    assert core.calls[0][1]["dry_run"] is False
+    assert core.calls[0][1]["safe"] is True
+    assert core.calls[0][1]["window_days"] == 45
 
 
 def test_internal_routes_reject_non_local_clients():
@@ -1033,8 +1087,36 @@ def test_mcp_forwards_maintenance_runner():
         assert response.status_code == 200
         assert core.calls[0][0] == "evomemory_run_maintenance"
         assert core.calls[0][1]["profile"] == "full"
-        assert core.calls[0][1]["min_confidence"] == 0.75
-        assert core.calls[0][1]["limit"] == 10
+    assert core.calls[0][1]["min_confidence"] == 0.75
+    assert core.calls[0][1]["limit"] == 10
+
+
+def test_mcp_forwards_retention_runner():
+    core = FakeCore()
+    with TestClient(create_app(core), base_url="http://127.0.0.1:8765") as client:
+        response = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 142,
+                "method": "tools/call",
+                "params": {
+                    "name": "evomemory_run_retention",
+                    "arguments": {
+                        "dry_run": False,
+                        "safe": True,
+                        "window_days": 45,
+                    },
+                },
+            },
+            headers={"Accept": "application/json, text/event-stream"},
+        )
+
+        assert response.status_code == 200
+        assert core.calls[0][0] == "evomemory_run_retention"
+        assert core.calls[0][1]["dry_run"] is False
+        assert core.calls[0][1]["safe"] is True
+        assert core.calls[0][1]["window_days"] == 45
 
 
 def test_mcp_forwards_governance_reconcile_runs():

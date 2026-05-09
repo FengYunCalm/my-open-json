@@ -285,6 +285,18 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
             limit=limit,
         )
 
+    @server.tool(name="evomemory_run_retention")
+    def evomemory_run_retention(
+        dry_run: bool = True,
+        safe: bool | None = None,
+        window_days: int | None = None,
+    ) -> dict[str, Any]:
+        return core.evomemory_run_retention(
+            dry_run=dry_run,
+            safe=safe,
+            window_days=window_days,
+        )
+
     @server.tool(name="evomemory_reconcile_governance")
     def evomemory_reconcile_governance() -> dict[str, Any]:
         return core.evomemory_reconcile_governance()
@@ -409,6 +421,22 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
                 profile=payload.get("profile", "light"),
                 min_confidence=float(payload.get("min_confidence", 0.5)),
                 limit=int(payload.get("limit", 20)),
+            )
+        )
+
+    @server.custom_route(
+        "/internal/maintenance/retention", methods=["POST"], include_in_schema=False
+    )
+    async def maintenance_retention_route(request: Request):
+        rejection = _reject_non_local_request(request)
+        if rejection is not None:
+            return rejection
+        payload = await request.json()
+        return JSONResponse(
+            core.evomemory_run_retention(
+                dry_run=bool(payload.get("dry_run", True)),
+                safe=payload.get("safe"),
+                window_days=payload.get("window_days"),
             )
         )
 

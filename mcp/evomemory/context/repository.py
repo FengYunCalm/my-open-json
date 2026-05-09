@@ -55,6 +55,18 @@ class ContextRepository:
     def invalidate_drawers(self, **kwargs):
         return self.backend.invalidate_drawers(**kwargs)
 
+    def delete_drawers(self, **kwargs):
+        deleter = getattr(self.backend, "delete_drawers", None)
+        if callable(deleter):
+            return deleter(**kwargs)
+        return 0
+
+    def list_stale_drawer_ids(self, **kwargs):
+        lister = getattr(self.backend, "list_stale_drawer_ids", None)
+        if callable(lister):
+            return lister(**kwargs)
+        return []
+
     def status(self):
         return self.backend.status()
 
