@@ -20,6 +20,9 @@ class ContextRetentionService:
             return max(0, int(self.core.config.retention_window_days or 0))
 
     def _current_referenced_record_ids(self) -> set[str]:
+        # Safe retention protects drawers that still anchor current beliefs.
+        # Governance events also store source_record_id, but that field is an
+        # audit pointer to the triggering context, not a retention root.
         return {
             item.get("source_record_id")
             for item in self.core.belief_service.export_facts(limit=None)

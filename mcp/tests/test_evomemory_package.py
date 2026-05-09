@@ -3173,6 +3173,69 @@ def test_retention_can_purge_old_current_drawers_when_safe_mode_is_disabled():
     assert core.repository.get_drawer(current["drawer_id"]) is None
 
 
+def test_retention_safe_mode_does_not_preserve_drawers_only_referenced_by_historical_events():
+    from evomemory.context.bridge import BridgeCore, BridgeConfig
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="evomemory-retention-event-history-"))
+    state_path = temp_dir / "state.sqlite3"
+    core = BridgeCore(BridgeConfig(state_path=state_path), backend=PromotionBackend())
+
+    backend = core.repository.backend
+    historical = backend.save_entry(
+        wing="opencode",
+        room="opencode-session",
+        content="User:\n这个项目里不要自动提交 git commit",
+        source_file="session:ses_retention_event_history",
+        metadata={
+            "session_id": "ses_retention_event_history",
+            "message_id": "msg_retention_event_history_1",
+            "role": "user",
+            "memory_tier": "project_memory",
+            "memory_key": "git_commit_behavior",
+            "memory_value": "disabled",
+            "valid_from": "2026-01-01T00:00:00+00:00",
+            "valid_to": "2026-01-02T00:00:00+00:00",
+            "filed_at": "2026-01-01T00:00:00+00:00",
+        },
+    )
+    core.promoter.promote_saved_memory(
+        scope="project",
+        memory_tier="project_memory",
+        memory_key="git_commit_behavior",
+        memory_value="disabled",
+        source_session="ses_retention_event_history",
+        source_message_id="msg_retention_event_history_1",
+        source_record_id=historical["drawer_id"],
+        valid_from="2026-01-01T00:00:00+00:00",
+    )
+    core.promoter.promote_saved_memory(
+        scope="project",
+        memory_tier="project_memory",
+        memory_key="git_commit_behavior",
+        memory_value="confirm_first",
+        source_session="ses_retention_event_history",
+        source_message_id="msg_retention_event_history_2",
+        source_record_id=None,
+        valid_from="2026-01-03T00:00:00+00:00",
+    )
+
+    result = core.evomemory_run_retention(dry_run=False, safe=True, window_days=30)
+    events = core.evomemory_list_evolution_events(limit=20)
+    timeline = core.evomemory_query_timeline(
+        scope="project",
+        key="git_commit_behavior",
+        limit=20,
+    )
+
+    assert result["deleted_drawer_ids"] == [historical["drawer_id"]]
+    assert core.repository.get_drawer(historical["drawer_id"]) is None
+    assert any(
+        item.get("source_record_id") == historical["drawer_id"]
+        for item in events["events"]
+    )
+    assert {item["action"] for item in timeline["events"]} >= {"promote", "supersede"}
+
+
 def test_maintenance_summary_exposes_retention_runtime_fields():
     from evomemory.context.bridge import BridgeCore, BridgeConfig
 
