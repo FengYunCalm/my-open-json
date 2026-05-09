@@ -1370,7 +1370,7 @@ test("suppresses non-triggered skill gate when a docs MCP clearly dominates", as
   );
 });
 
-test("suppresses thinking MCP gate when a strong reasoning skill already gates the task", async () => {
+test("suppresses thinking MCP gate only for the first strong reasoning match", async () => {
   const tempRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), "tool-forced-eval-reasoning-priority-"),
   );
@@ -1412,25 +1412,38 @@ test("suppresses thinking MCP gate when a strong reasoning skill already gates t
     async () => {
       const plugin = await createPlugin({ directory, worktree });
 
-      await plugin["chat.message"](
-        { sessionID: "session-reasoning-priority" },
-        {
-          message: { parts: [] },
-          parts: [{ type: "text", text: "请给我一个实施方案" }],
-        },
-      );
+      const message = {
+        message: { parts: [] },
+        parts: [{ type: "text", text: "请给我一个实施方案" }],
+      };
 
-      const output = { system: [] };
+      await plugin["chat.message"]({ sessionID: "session-reasoning-priority" }, message);
+
+      const firstOutput = { system: [] };
       await plugin["experimental.chat.system.transform"](
         { sessionID: "session-reasoning-priority", model: {} },
-        output,
+        firstOutput,
       );
 
-      const injected = output.system.at(-1) ?? "";
-      assert.match(injected, /### Skill Gate/);
-      assert.match(injected, /`writing-plans`/);
-      assert.doesNotMatch(injected, /### MCP Gate/);
-      assert.doesNotMatch(injected, /`thinking_\*`/);
+      const firstInjected = firstOutput.system.at(-1) ?? "";
+      assert.match(firstInjected, /### Skill Gate/);
+      assert.match(firstInjected, /`writing-plans`/);
+      assert.doesNotMatch(firstInjected, /### MCP Gate/);
+      assert.doesNotMatch(firstInjected, /`thinking_\*`/);
+
+      await plugin["chat.message"]({ sessionID: "session-reasoning-priority" }, message);
+
+      const secondOutput = { system: [] };
+      await plugin["experimental.chat.system.transform"](
+        { sessionID: "session-reasoning-priority", model: {} },
+        secondOutput,
+      );
+
+      const secondInjected = secondOutput.system.at(-1) ?? "";
+      assert.match(secondInjected, /### Skill Gate/);
+      assert.match(secondInjected, /`writing-plans`/);
+      assert.match(secondInjected, /### MCP Gate/);
+      assert.match(secondInjected, /`thinking_\*`/);
     },
   );
 });

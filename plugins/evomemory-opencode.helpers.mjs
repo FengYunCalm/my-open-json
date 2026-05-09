@@ -22,17 +22,17 @@ const SMALL_TALK_PATTERNS = [
   /^嗯嗯$/,
 ];
 const HISTORY_HINTS = [
-  /\b(prior|previous|earlier|past|history|historical|remember|remind|decisions?|preferences?|constraint|constraints|feedback|benchmark)\b/i,
+  /\b(prior|previous|earlier|past|history|historical|remember|remind|decisions?|preferences?|constraint|constraints|feedback|benchmark|decision|decision-making)\b/i,
   /\bwhat did we decide\b/i,
   /\bused to\b/i,
   /\bstable preferences?\b/i,
-  /(之前|先前|以前|过去|历史|历史决策|偏好|约束|反馈|基准|记忆)/,
+  /(之前|先前|以前|过去|历史|历史决策|偏好|约束|反馈|基准|记忆|决策|判断)/,
 ];
 const PROJECT_LEARNING_HINTS = [
-  /\b(project onboarding|project learning|repo audit|repository audit|code audit|architecture review|learn (this|the) (project|repo|repository|codebase)|familiarize (me )?with (this|the) (project|repo|repository|codebase))\b/i,
-  /(学习|熟悉).*(项目|仓库|代码库|源码|插件)/,
-  /(审计|检查|梳理).*(项目|仓库|代码|插件|架构)/,
-  /(项目学习|项目审计|代码审计|架构梳理|架构审查|熟悉仓库|熟悉项目)/,
+  /\b(project onboarding|project learning|repo audit|repository audit|code audit|architecture review|learn (this|the) (project|repo|repository|codebase)|familiarize (me )?with (this|the) (project|repo|repository|codebase)|project context|task context|implementation plan)\b/i,
+  /(学习|熟悉).*(项目|仓库|代码库|源码|插件|上下文|任务)/,
+  /(审计|检查|梳理).*(项目|仓库|代码|插件|架构|上下文|任务)/,
+  /(项目学习|项目审计|代码审计|架构梳理|架构审查|熟悉仓库|熟悉项目|项目上下文|任务上下文)/,
 ];
 const CURRENT_CODE_HINTS = [
   /\bcurrent implementation\b/i,

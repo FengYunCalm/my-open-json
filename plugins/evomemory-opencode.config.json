@@ -3,7 +3,7 @@
   "minSearchChars": 16,
   "minPersistChars": 8,
   "maxInjectedChars": 1800,
-  "minRetrievalScore": 0.28,
+  "minRetrievalScore": 0.24,
   "safeExcerptChars": 180,
   "preloadCoreMemory": true,
   "autoFlushOnMessage": true,

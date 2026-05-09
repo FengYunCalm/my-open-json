@@ -624,8 +624,7 @@ export const EvomemoryOpencodePlugin = async ({
 
     "chat.message": async ({ sessionID }, output) => {
       const text = collectText(output.parts);
-      const allowCoreMemory =
-        !shouldPersist(text, config) && !text.trim().startsWith("/");
+      const allowCoreMemory = !text.trim().startsWith("/");
       patchSessionState(
         sessions,
         sessionID,

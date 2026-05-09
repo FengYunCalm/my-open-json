@@ -134,7 +134,7 @@ test("does not trust bridge-provided system_block and renders a local safe block
   );
 });
 
-test("does not query evomemory for long current-code inspection prompts", async () => {
+test("keeps current-code prompts local while still allowing safe stable-memory preload", async () => {
   const calls = [];
 
   const fetchImpl = async (url) => {
@@ -144,9 +144,18 @@ test("does not query evomemory for long current-code inspection prompts", async 
     }
 
     if (String(url).endsWith("/internal/context/search")) {
-      throw new Error(
-        "should not search evomemory for current-code inspection prompts",
-      );
+      return jsonResponse({
+        wing: "opencode",
+        core_memory: [
+          {
+            memory_tier: "project_memory",
+            memory_key: "git_commit_behavior",
+            memory_value: "confirm_first",
+            source_file: "session:ses_code_truth",
+          },
+        ],
+        results: [],
+      });
     }
 
     if (String(url).endsWith("/internal/session/flush")) {
@@ -189,15 +198,16 @@ test("does not query evomemory for long current-code inspection prompts", async 
     output,
   );
 
-  assert.deepEqual(output.system, []);
   assert.equal(
     calls.filter((url) => url.endsWith("/internal/context/search")).length,
-    0,
+    1,
   );
   assert.equal(
     calls.filter((url) => url.endsWith("/internal/session/flush")).length,
     1,
   );
+  assert.match(output.system[0], /git_commit_behavior=confirm_first/);
+  assert.doesNotMatch(output.system[0], /plugins\/tool-forced-eval\.js/);
 });
 
 test("does not flush evomemory on tiny chinese chatter", async () => {
@@ -325,6 +335,67 @@ test("preloads core memory so tiny follow-up prompts can still receive stable co
   assert.match(output.system[0], /code_change_permission=confirm_first/);
   assert.doesNotMatch(output.system[0], /drawer_should_not_preload/);
 });
+
+ test("searches for history and project-learning prompts while keeping current-code prompts local", async () => {
+   const calls = [];
+
+   const fetchImpl = async (url) => {
+     calls.push(String(url));
+     if (String(url).endsWith("/health")) {
+       return jsonResponse({ ok: true });
+     }
+
+     if (String(url).endsWith("/internal/context/search")) {
+       return jsonResponse({
+         wing: "opencode",
+         core_memory: [
+           {
+             memory_tier: "project_memory",
+             memory_key: "task_context",
+             memory_value: "prefer_evomemory",
+             source_file: "session:ses_search",
+           },
+         ],
+         results: [],
+       });
+     }
+
+     if (String(url).endsWith("/internal/session/flush")) {
+       return jsonResponse({ last_saved_message_id: "msg_search_001" });
+     }
+
+     throw new Error(`unexpected url: ${url}`);
+   };
+
+   const plugin = await EvomemoryOpencodePlugin({
+     client: {
+       app: { log: async () => {} },
+       session: { messages: async () => ({ data: [] }) },
+     },
+     directory: "/repo",
+     worktree: "/repo",
+     configOverride: {
+       bridgeBaseUrl: "http://127.0.0.1:8883",
+       minSearchChars: 16,
+     },
+     fetchImpl,
+   });
+
+   await plugin["chat.message"](
+     { sessionID: "ses_search" },
+     { parts: [{ type: "text", text: "请学习一下这个项目上下文和任务上下文" }] },
+   );
+
+   await plugin["chat.message"](
+     { sessionID: "ses_search" },
+     { parts: [{ type: "text", text: "请解释一下 plugins/tool-forced-eval.js 这个文件的当前实现" }] },
+   );
+
+   assert.equal(
+     calls.filter((url) => url.endsWith("/internal/context/search")).length,
+     1,
+   );
+ });
 
 test("forwards include_trace and logs retrieval trace when enabled", async () => {
   const calls = [];

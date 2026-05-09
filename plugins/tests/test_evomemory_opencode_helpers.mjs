@@ -67,6 +67,16 @@ test("shouldSearch prefers history-seeking prompts over current-code inspection 
     }),
     true,
   );
+  assert.equal(
+    shouldSearch("请回顾一下这个项目之前关于任务上下文和实施方案的历史决策", {
+      minSearchChars: 16,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldSearch("请学习一下这个项目上下文和任务上下文", { minSearchChars: 16 }),
+    true,
+  );
 });
 
 test("shouldSearch handles Chinese history prompts and current-code prompts", () => {
@@ -147,6 +157,11 @@ test("buildSystemBlock filters low scoring search hits", () => {
           retrieval_scores: { total: 0.12 },
         },
         {
+          drawer_id: "drawer_mid",
+          similarity: 0.24,
+          retrieval_scores: { total: 0.25 },
+        },
+        {
           drawer_id: "drawer_high",
           similarity: 0.2,
           retrieval_scores: { total: 0.73 },
@@ -154,10 +169,11 @@ test("buildSystemBlock filters low scoring search hits", () => {
       ],
     },
     800,
-    { minRetrievalScore: 0.28 },
+    { minRetrievalScore: 0.24 },
   );
 
   assert.doesNotMatch(block, /drawer_low/);
+  assert.match(block, /drawer_mid/);
   assert.match(block, /drawer_high/);
 });
 

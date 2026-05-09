@@ -1063,7 +1063,8 @@ function shouldSuppressMcpSuggestions(routing, skillNudge) {
     routing.intent.key === "reasoning" &&
     topMcp?.name === "thinking" &&
     skillNudge &&
-    skillNudge.mode !== "soft"
+    skillNudge.mode === "strong" &&
+    skillNudge.repeatedCount === 1
   ) {
     return true;
   }
