@@ -112,12 +112,31 @@ Stronger test paths:
 - `xiakexing_ai_run_clean_regression_test`
 - `xiakexing_ai_run_admin_maintenance_test`
 
+## Long-term Test Accounts
+
+The repo-local ai-player config is the stable source for repeatable test identities:
+
+- regular regression defaults live under `tools/ai-player/config.yaml -> test`
+- long-term admin maintenance defaults live under `tools/ai-player/config.yaml -> admin`
+
+Current long-term admin test account contract:
+
+- account: `ai_player_admin01`
+- role name: `管测甲`
+- gender: `男`
+
+The configured password lives in `tools/ai-player/config.yaml -> admin.default_password` and must stay compatible with `server/config/game.cfg [security].password_min_len`.
+Do not revert ai-player defaults to legacy 7-character passwords like `test123`; current runtime requires 8+ characters.
+
+When preparing `xiakexing_ai_run_admin_maintenance_test` arguments, treat the repo-configured admin defaults as the source of truth unless the task explicitly requires a temporary account.
+
 ## Preconditions
 
 - The MUD server should be reachable at the host and port configured in `tools/ai-player/config.yaml`.
 - Direct mode default remains `localhost:3939`.
 - Latest gateway validation mode uses `127.0.0.1:8080` with `server.transport = websocket`.
 - Maintenance/report commands are expected to emit the contract described in `tools/ai-player/PROTOCOL_CONTRACT.md`.
+- If admin maintenance login fails after a password policy change, inspect `tools/ai-player/config.yaml`, `tools/ai-player/config_loader.py`, and `tools/ai-player/regression_runner.py` together before blaming the game server.
 
 ## Operating Rules
 
