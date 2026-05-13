@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import MISSING, fields
 import re
 from datetime import datetime, timezone
+from time import perf_counter
 from typing import Any
 
 
@@ -131,6 +132,7 @@ class ContextQueryService:
         session_id: str | None = None,
         include_trace: bool = False,
     ) -> dict[str, Any]:
+        started_at = perf_counter()
         normalized_directory = self.core._normalize_directory(directory)
         wing = self.core.resolve_wing(directory)
         context_items, context_total_count, context_truncated_count, retrieval_trace = (
@@ -169,6 +171,35 @@ class ContextQueryService:
         }
         if retrieval_trace is not None:
             payload["retrieval_trace"] = retrieval_trace
+            payload["trace"] = {
+                "session_id": session_id,
+                "directory": normalized_directory,
+                "wing": wing,
+                "trigger_decision": {"include_trace": include_trace},
+                "search_type": "context_search",
+                "candidate_count": max(
+                    retrieval_trace.get("candidate_count", 0),
+                    retrieval_trace.get(
+                        "selected_count", retrieval_trace.get("returned_count", 0)
+                    ),
+                    len(results),
+                    len(core_memory),
+                ),
+                "selected_count": retrieval_trace.get(
+                    "selected_count", retrieval_trace.get("returned_count", 0)
+                ),
+                "chosen_results": retrieval_trace.get("chosen_results", []),
+                "injection_budget_used": {
+                    "characters": len(payload["system_block"]),
+                    "estimated_tokens": (len(payload["system_block"]) + 3) // 4,
+                },
+                "redactions": [],
+                "write_capture_decision": "none",
+                "maintenance_action": "none",
+                "latency_ms": round((perf_counter() - started_at) * 1000, 3),
+                "timeout_fallback_reason": None,
+                "status": "ok",
+            }
         result = self.core.runtime_orchestrator.augment_context_payload(payload)
         self._record_runtime_context(result)
         self.core._persist_runtime_state()

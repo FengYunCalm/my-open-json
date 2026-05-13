@@ -15,6 +15,7 @@ test('ships evomemory plugin config template', () => {
   assert.equal(existsSync(path), true)
   const content = readFileSync(path, 'utf8')
   assert.match(content, /"bridgeBaseUrl"/)
+  assert.match(content, /"searchMode"\s*:\s*"targeted"/)
   assert.match(content, /evomemory-bridge\.service/)
 })
 

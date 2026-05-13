@@ -11,6 +11,7 @@ from mcp.server.fastmcp import FastMCP
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from evomemory.context.bridge import BridgeConfig, BridgeCore
 
@@ -41,6 +42,56 @@ def _validate_bind_host(host: str) -> None:
     raise SystemExit(
         "Refusing to bind evomemory bridge to a non-loopback host without EVOMEMORY_ALLOW_REMOTE=1"
     )
+
+
+def _normalize_mcp_accept_header(raw_accept: str | None) -> str | None:
+    if raw_accept is None:
+        return None
+
+    media_ranges = {
+        part.split(";", 1)[0].strip().lower()
+        for part in raw_accept.split(",")
+        if part.strip()
+    }
+    if not media_ranges:
+        return None
+
+    accepts_json = "application/json" in media_ranges
+    accepts_sse = "text/event-stream" in media_ranges
+    accepts_json_wildcard = bool({"*/*", "application/*"} & media_ranges)
+
+    if accepts_sse and not accepts_json:
+        return "application/json, text/event-stream"
+    if accepts_json_wildcard and not accepts_json:
+        return "application/json, text/event-stream"
+    return None
+
+
+class MCPAcceptCompatibilityWrapper:
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("path") != "/mcp":
+            await self.app(scope, receive, send)
+            return
+
+        headers = list(scope.get("headers", []))
+        rewritten = False
+        for index, (name, value) in enumerate(headers):
+            if name.lower() != b"accept":
+                continue
+            replacement = _normalize_mcp_accept_header(value.decode("latin-1"))
+            if replacement is None:
+                continue
+            headers[index] = (name, replacement.encode("latin-1"))
+            rewritten = True
+            break
+
+        if rewritten:
+            scope = {**scope, "headers": headers}
+
+        await self.app(scope, receive, send)
 
 
 async def _run_core_call(func, *args, **kwargs):
@@ -445,7 +496,8 @@ def create_mcp_server(core: BridgeCore | Any) -> FastMCP:
 
 def create_app(core: BridgeCore | Any | None = None):
     bridge_core = core or BridgeCore(BridgeConfig())
-    return create_mcp_server(bridge_core).streamable_http_app()
+    app = create_mcp_server(bridge_core).streamable_http_app()
+    return MCPAcceptCompatibilityWrapper(app)
 
 
 def parse_args() -> argparse.Namespace:

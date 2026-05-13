@@ -2098,14 +2098,15 @@ def test_search_context_prioritizes_session_directory_wing_then_global():
         "drawer_opencode_opencode-session_def456",
         "drawer_opencode_opencode-session_jkl111",
         "drawer_opencode_opencode-session_ghi789",
-        "drawer_global_memory_mno222",
     ]
     assert [item["search_tier"] for item in result["results"]] == [
         "session",
         "session",
         "directory",
         "wing",
-        "global",
+    ]
+    assert "drawer_global_memory_mno222" not in [
+        item["drawer_id"] for item in result["results"]
     ]
     assert [item["memory_key"] for item in result["core_memory"]] == [
         "response_language",
@@ -2220,9 +2221,30 @@ def test_search_context_reports_truncated_context_count():
         "drawer_opencode_opencode-session_def456",
         "drawer_opencode_opencode-session_jkl111",
     ]
-    assert result["context_total_count"] == 5
-    assert result["context_truncated_count"] == 2
-    assert "2 more context memories omitted" in result["system_block"]
+    assert result["context_total_count"] == 4
+    assert result["context_truncated_count"] == 1
+    assert "1 more context memories omitted" in result["system_block"]
+
+
+def test_search_context_include_trace_returns_trace_spine():
+    core, _backend = make_core(search_limit=2)
+
+    result = core.search_context(
+        "navigation",
+        "/home/mechrevo/.config/opencode",
+        session_id="ses_trace_spine",
+        include_trace=True,
+    )
+
+    trace = result["trace"]
+    assert trace["session_id"] == "ses_trace_spine"
+    assert trace["directory"] == "/home/mechrevo/.config/opencode"
+    assert trace["wing"] == "opencode"
+    assert trace["search_type"] == "context_search"
+    assert trace["candidate_count"] >= trace["selected_count"] == 2
+    assert len(trace["chosen_results"]) == 2
+    assert trace["injection_budget_used"]["characters"] == len(result["system_block"])
+    assert trace["status"] == "ok"
 
 
 def test_search_context_system_block_respects_budget_when_only_notices_fit():
@@ -2246,5 +2268,5 @@ def test_search_context_system_block_respects_budget_when_only_notices_fit():
 
     assert len(result["system_block"]) <= 80
     assert "1 more core memories omitted" in result["system_block"]
-    assert "4 more context memories omitted" in result["system_block"]
+    assert "3 more context memories omitted" in result["system_block"]
     assert "EvoMemory context for wing 'opencode':" not in result["system_block"]

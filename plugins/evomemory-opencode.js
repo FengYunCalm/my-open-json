@@ -6,6 +6,7 @@ import {
   buildSystemBlock,
   collectText,
   messagesSinceCheckpoint,
+  sanitizeHistoricalText,
   shouldPersist,
   shouldSearch,
 } from "./evomemory-opencode.helpers.mjs";
@@ -15,6 +16,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const DEFAULTS = {
   bridgeBaseUrl: "http://127.0.0.1:8765",
+  searchMode: "targeted",
   minSearchChars: 16,
   minPersistChars: 8,
   maxInjectedChars: 1800,
@@ -30,6 +32,7 @@ const DEFAULTS = {
   maxLifecycleHistoryMessages: 40,
   searchIncludeTrace: false,
   logRetrievalTrace: false,
+  traceSpineEnabled: false,
   maintenanceProfile: "light",
   maintenanceMinConfidence: 0.5,
   maintenanceLimit: 20,
@@ -63,6 +66,7 @@ function createSessionState(directory) {
     directory,
     coreBlock: "",
     systemBlock: "",
+    lastTrace: null,
     allowCoreMemory: true,
     lastSavedMessageID: null,
     lastSavedMessageIndex: null,
@@ -112,6 +116,51 @@ function normalizeFlushPayload(payload) {
   return { issues, lastSavedMessageID };
 }
 
+function normalizeSearchTrace(payload) {
+  const normalizedPayload = normalizeSearchPayload(payload).value;
+  const rawTrace =
+    normalizedPayload.trace && typeof normalizedPayload.trace === "object"
+      ? normalizedPayload.trace
+      : {};
+  const rawRetrievalTrace = normalizedPayload.retrieval_trace ?? {};
+  const rankedCandidates = Array.isArray(rawRetrievalTrace.ranked_candidates)
+    ? rawRetrievalTrace.ranked_candidates
+    : Array.isArray(rawTrace.ranked_candidates)
+      ? rawTrace.ranked_candidates
+      : [];
+  const candidateCount = Number(
+    rawTrace.candidate_count ?? rawRetrievalTrace.candidate_count ?? NaN,
+  );
+  const selectedCount = Number(
+    rawTrace.selected_count ??
+      rawRetrievalTrace.selected_count ??
+      rawRetrievalTrace.returned_count ??
+      rankedCandidates.filter((item) => item?.included).length,
+  );
+  const derivedCandidateCount = Math.max(
+    normalizedPayload.results.length,
+    normalizedPayload.core_memory.length,
+    normalizedPayload.belief_memory.length,
+    Array.isArray(normalizedPayload.governance_assets?.genes)
+      ? normalizedPayload.governance_assets.genes.length
+      : 0,
+    Array.isArray(normalizedPayload.governance_assets?.capsules)
+      ? normalizedPayload.governance_assets.capsules.length
+      : 0,
+    rankedCandidates.length,
+    Number.isFinite(selectedCount) ? selectedCount : 0,
+  );
+  return {
+    rawTrace,
+    rawRetrievalTrace,
+    rankedCandidates,
+    candidateCount: Number.isFinite(candidateCount)
+      ? Math.max(candidateCount, derivedCandidateCount)
+      : derivedCandidateCount,
+    selectedCount: Number.isFinite(selectedCount) ? selectedCount : 0,
+  };
+}
+
 function normalizeSearchPayload(payload) {
   const issues = [];
   const isObject = payload && typeof payload === "object";
@@ -121,8 +170,12 @@ function normalizeSearchPayload(payload) {
       value: {
         wing: undefined,
         core_memory: [],
+        belief_memory: [],
+        governance_assets: { genes: [], capsules: [] },
         results: [],
         retrieval_trace: null,
+        trace: null,
+        system_block: "",
       },
     };
   }
@@ -130,8 +183,18 @@ function normalizeSearchPayload(payload) {
   if (payload.core_memory != null && !Array.isArray(payload.core_memory)) {
     issues.push("invalid core_memory");
   }
+  if (payload.belief_memory != null && !Array.isArray(payload.belief_memory)) {
+    issues.push("invalid belief_memory");
+  }
   if (payload.results != null && !Array.isArray(payload.results)) {
     issues.push("invalid results");
+  }
+  if (
+    payload.governance_assets != null &&
+    (typeof payload.governance_assets !== "object" ||
+      Array.isArray(payload.governance_assets))
+  ) {
+    issues.push("invalid governance_assets");
   }
   if (
     payload.retrieval_trace != null &&
@@ -139,6 +202,18 @@ function normalizeSearchPayload(payload) {
       Array.isArray(payload.retrieval_trace))
   ) {
     issues.push("invalid retrieval_trace");
+  }
+  if (
+    payload.trace != null &&
+    (typeof payload.trace !== "object" || Array.isArray(payload.trace))
+  ) {
+    issues.push("invalid trace");
+  }
+  if (
+    payload.system_block != null &&
+    typeof payload.system_block !== "string"
+  ) {
+    issues.push("invalid system_block");
   }
 
   return {
@@ -151,6 +226,15 @@ function normalizeSearchPayload(payload) {
       core_memory: Array.isArray(payload.core_memory)
         ? payload.core_memory
         : [],
+      belief_memory: Array.isArray(payload.belief_memory)
+        ? payload.belief_memory
+        : [],
+      governance_assets:
+        payload.governance_assets &&
+        typeof payload.governance_assets === "object" &&
+        !Array.isArray(payload.governance_assets)
+          ? payload.governance_assets
+          : { genes: [], capsules: [] },
       results: Array.isArray(payload.results) ? payload.results : [],
       retrieval_trace:
         payload.retrieval_trace &&
@@ -158,6 +242,12 @@ function normalizeSearchPayload(payload) {
         !Array.isArray(payload.retrieval_trace)
           ? payload.retrieval_trace
           : null,
+      trace:
+        payload.trace && typeof payload.trace === "object" && !Array.isArray(payload.trace)
+          ? payload.trace
+          : null,
+      system_block:
+        typeof payload.system_block === "string" ? payload.system_block : "",
     },
   };
 }
@@ -269,6 +359,109 @@ function getPositiveDuration(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function isTraceEnabled(config) {
+  return Boolean(
+    config.traceSpineEnabled || config.searchIncludeTrace || config.logRetrievalTrace,
+  );
+}
+
+function inferTriggerDecision(text, config) {
+  const normalized = String(text ?? "").trim();
+  return {
+    should_persist: shouldPersist(text, config),
+    should_search: shouldSearch(text, config),
+    prompt_chars: normalized.length,
+  };
+}
+
+function compactRedactionCounts(redactions = []) {
+  const counts = new Map();
+  for (const item of redactions) {
+    if (!item?.label) continue;
+    counts.set(item.label, (counts.get(item.label) ?? 0) + Number(item.count ?? 1));
+  }
+  return [...counts.entries()].map(([label, count]) => ({ label, count }));
+}
+
+function collectRedactionsFromMemory(payload) {
+  const redactions = [];
+  const inspect = (value) => {
+    const before = String(value ?? "");
+    const after = sanitizeHistoricalText(before);
+    if (before && before !== after) redactions.push({ label: "memory_text", count: 1 });
+  };
+  for (const item of payload?.core_memory ?? []) {
+    inspect(item?.memory_key);
+    inspect(item?.memory_value);
+  }
+  for (const item of payload?.belief_memory ?? []) {
+    inspect(item?.key);
+    inspect(item?.value);
+  }
+  for (const item of payload?.governance_assets?.genes ?? []) {
+    inspect(item?.key);
+    inspect(item?.value);
+  }
+  for (const item of payload?.results ?? []) {
+    inspect(item?.reason_summary);
+    inspect(item?.preview ?? item?.text);
+  }
+  return compactRedactionCounts(redactions);
+}
+
+function summarizeChosenCandidates(rankedCandidates = [], results = []) {
+  const rankedChosen = rankedCandidates.filter((item) => item?.included);
+  const chosen = rankedChosen.length ? rankedChosen : results;
+  return chosen.slice(0, 10).map((item) => ({
+    id: item?.drawer_id ?? item?.id ?? null,
+    reason: sanitizeHistoricalText(
+      item?.reason_summary ??
+        (Array.isArray(item?.reasons) ? item.reasons.join(", ") : ""),
+    ),
+  }));
+}
+
+function createTraceSpine({
+  sessionID,
+  directory,
+  wing,
+  text,
+  config,
+  searchType,
+  requestTimeoutMs,
+}) {
+  return {
+    session_id: sessionID ?? null,
+    directory: directory ?? null,
+    wing: wing ?? "opencode",
+    trigger_decision: inferTriggerDecision(text, config),
+    search_type: searchType,
+    candidate_count: 0,
+    selected_count: 0,
+    chosen_results: [],
+    injection_budget_used: { characters: 0, estimated_tokens: 0 },
+    redactions: [],
+    write_capture_decision: "none",
+    maintenance_action: "none",
+    latency_ms: 0,
+    request_timeout_ms: requestTimeoutMs,
+    timeout_fallback_reason: null,
+    status: "pending",
+  };
+}
+
+function finalizeTraceSpine(trace, patch = {}) {
+  if (!trace) return null;
+  return {
+    ...trace,
+    ...patch,
+    redactions: compactRedactionCounts([
+      ...(trace.redactions ?? []),
+      ...(patch.redactions ?? []),
+    ]),
+  };
+}
+
 function isInCooldown(until, dependencies) {
   return Number(until ?? 0) > getClockNow(dependencies);
 }
@@ -331,6 +524,17 @@ export const EvomemoryOpencodePlugin = async ({
   const getDirectory = (sessionID) =>
     sessions.get(sessionID)?.directory ?? worktree ?? directory;
 
+  const storeTrace = (sessionID, trace, fallbackDirectory) => {
+    if (!isTraceEnabled(config) || !trace) return null;
+    patchSessionState(
+      sessions,
+      sessionID,
+      { lastTrace: trace },
+      fallbackDirectory ?? getDirectory(sessionID),
+    );
+    return trace;
+  };
+
   runDetached(() =>
     ensureBridge(config, client, dependencies).catch((error) =>
       log(client, "warn", "EvoMemory bridge prewarm failed", {
@@ -377,8 +581,9 @@ export const EvomemoryOpencodePlugin = async ({
     return payload;
   }
 
-  function renderBlock(payload) {
+  function renderBlock(payload, options = {}) {
     return buildSystemBlock(payload, config.maxInjectedChars, {
+      currentDirectory: options.currentDirectory,
       minRetrievalScore: config.minRetrievalScore,
       safeExcerptChars: config.safeExcerptChars,
     });
@@ -386,6 +591,7 @@ export const EvomemoryOpencodePlugin = async ({
 
   async function preloadCoreMemory(sessionID, dir) {
     if (!config.preloadCoreMemory) return null;
+    if (config.searchMode === "off") return null;
     const session = getSessionState(sessions, sessionID, dir);
     if (isInCooldown(session.corePreloadCooldownUntil, dependencies)) {
       return null;
@@ -430,10 +636,13 @@ export const EvomemoryOpencodePlugin = async ({
         },
       );
     }
-    const coreBlock = renderBlock({
-      ...normalizedSearch.value,
-      results: [],
-    });
+    const coreBlock = renderBlock(
+      {
+        ...normalizedSearch.value,
+        results: [],
+      },
+      { currentDirectory: dir },
+    );
     patchSessionState(sessions, sessionID, { coreBlock }, dir);
     await log(client, "debug", "EvoMemory core memory preloaded", {
       sessionID,
@@ -628,10 +837,14 @@ export const EvomemoryOpencodePlugin = async ({
       patchSessionState(
         sessions,
         sessionID,
-        { systemBlock: "", allowCoreMemory },
+        { systemBlock: "", lastTrace: null, allowCoreMemory },
         getDirectory(sessionID),
       );
-      if (config.autoFlushOnMessage && shouldPersist(text, config)) {
+      const traceEnabled = isTraceEnabled(config);
+      const traceStart = traceEnabled ? Date.now() : 0;
+      const shouldCapture = config.autoFlushOnMessage && shouldPersist(text, config);
+      let writeCaptureDecision = shouldCapture ? "message_flush_queued" : "skipped";
+      if (shouldCapture) {
         const extra = hookMessage(output);
         const flushPromise = runDetached(() =>
           flushSession(sessionID, "message", {
@@ -646,18 +859,77 @@ export const EvomemoryOpencodePlugin = async ({
         );
         await waitBriefly(flushPromise, config.messageFlushWaitMs);
       }
-      if (!shouldSearch(text, config)) return;
+      const requestTimeoutMs = getPositiveDuration(
+        config.searchRequestTimeoutMs,
+        config.requestTimeoutMs,
+      );
+      let trace = traceEnabled
+        ? createTraceSpine({
+            sessionID,
+            directory: getDirectory(sessionID),
+            wing: "opencode",
+            text,
+            config,
+            searchType: "context_search",
+            requestTimeoutMs,
+          })
+        : null;
+      trace = finalizeTraceSpine(trace, {
+        write_capture_decision: writeCaptureDecision,
+      });
+      if (!shouldSearch(text, config)) {
+        const skippedTrace = storeTrace(
+          sessionID,
+          finalizeTraceSpine(trace, {
+            latency_ms: traceEnabled ? Date.now() - traceStart : 0,
+            status: "fail-open",
+            timeout_fallback_reason: "search_not_triggered",
+          }),
+        );
+        await log(client, "debug", "EvoMemory context search skipped", {
+          sessionID,
+          trace: traceEnabled ? skippedTrace : undefined,
+        });
+        return;
+      }
       const session = getSessionState(
         sessions,
         sessionID,
         getDirectory(sessionID),
       );
       if (isInCooldown(session.contextSearchCooldownUntil, dependencies)) {
+        storeTrace(
+          sessionID,
+          finalizeTraceSpine(trace, {
+            directory: session.directory,
+            latency_ms: traceEnabled ? Date.now() - traceStart : 0,
+            status: "fail-open",
+            timeout_fallback_reason: "search_failure_cooldown",
+          }),
+          session.directory,
+        );
         return;
       }
-      if (!(await ensureBridge(config, client, dependencies))) return;
+      if (!(await ensureBridge(config, client, dependencies))) {
+        const failedTrace = storeTrace(
+          sessionID,
+          finalizeTraceSpine(trace, {
+            directory: session.directory,
+            latency_ms: traceEnabled ? Date.now() - traceStart : 0,
+            status: "fail-open",
+            timeout_fallback_reason: "bridge_unavailable",
+          }),
+          session.directory,
+        );
+        await log(client, "warn", "Context search failed", {
+          sessionID,
+          error: "bridge unavailable",
+          trace: traceEnabled ? failedTrace : undefined,
+        });
+        return;
+      }
       const includeTrace = Boolean(
-        config.searchIncludeTrace || config.logRetrievalTrace,
+        config.searchIncludeTrace || config.logRetrievalTrace || config.traceSpineEnabled,
       );
       const search = await fetchJson(
         config.bridgeBaseUrl,
@@ -670,10 +942,7 @@ export const EvomemoryOpencodePlugin = async ({
             query: text,
             include_trace: includeTrace,
           }),
-          requestTimeoutMs: getPositiveDuration(
-            config.searchRequestTimeoutMs,
-            config.requestTimeoutMs,
-          ),
+          requestTimeoutMs,
           fetchImpl: dependencies.fetchImpl,
         },
       ).catch((error) => {
@@ -685,9 +954,22 @@ export const EvomemoryOpencodePlugin = async ({
           dependencies,
           getDirectory(sessionID),
         );
+        const failedTrace = storeTrace(
+          sessionID,
+          finalizeTraceSpine(trace, {
+            directory: session.directory,
+            latency_ms: traceEnabled ? Date.now() - traceStart : 0,
+            status: "fail-open",
+            timeout_fallback_reason: String(error).includes("timed out")
+              ? "bridge_timeout"
+              : "search_failed",
+          }),
+          session.directory,
+        );
         log(client, "warn", "Context search failed", {
           sessionID,
           error: String(error),
+          trace: traceEnabled ? failedTrace : undefined,
         });
         return null;
       });
@@ -723,11 +1005,40 @@ export const EvomemoryOpencodePlugin = async ({
           topScores: topCandidate?.scores ?? {},
         });
       }
-      const systemBlock = renderBlock(normalizedSearch.value);
+      const systemBlock = renderBlock(normalizedSearch.value, {
+        currentDirectory: session.directory,
+      });
+      const normalizedTrace = normalizeSearchTrace(normalizedSearch.value);
+      const backendTrace = normalizedSearch.value.trace ?? {};
+      const selectedCount = systemBlock
+        ? normalizedTrace.selectedCount || normalizedSearch.value.results.length
+        : 0;
+      const completedTrace = finalizeTraceSpine(trace, {
+        directory: backendTrace.directory ?? session.directory,
+        wing: normalizedSearch.value.wing ?? backendTrace.wing ?? trace?.wing,
+        candidate_count: normalizedTrace.candidateCount,
+        selected_count: selectedCount,
+        chosen_results:
+          selectedCount > 0
+            ? summarizeChosenCandidates(
+                normalizedTrace.rankedCandidates,
+                normalizedSearch.value.results,
+              )
+            : [],
+        injection_budget_used: {
+          characters: systemBlock.length,
+          estimated_tokens: Math.ceil(systemBlock.length / 4),
+        },
+        redactions: collectRedactionsFromMemory(normalizedSearch.value),
+        maintenance_action: backendTrace.maintenance_action ?? "none",
+        latency_ms: traceEnabled ? Date.now() - traceStart : 0,
+        timeout_fallback_reason: backendTrace.timeout_fallback_reason ?? null,
+        status: backendTrace.status ?? "ok",
+      });
       patchSessionState(
         sessions,
         sessionID,
-        { systemBlock },
+        { systemBlock, lastTrace: completedTrace },
         getDirectory(sessionID),
       );
       await log(client, "debug", "EvoMemory context search completed", {
@@ -735,6 +1046,7 @@ export const EvomemoryOpencodePlugin = async ({
         resultsCount: normalizedSearch.value.results.length,
         coreMemoryCount: normalizedSearch.value.core_memory.length,
         systemBlockLength: systemBlock.length,
+        trace: traceEnabled ? completedTrace : undefined,
       });
     },
 
@@ -777,12 +1089,33 @@ export const EvomemoryOpencodePlugin = async ({
         output.context.push(
           "Recent conversation was persisted to EvoMemory before compaction.",
         );
-        await runMaintenance(sessionID).catch((error) => {
+        const maintenancePayload = await runMaintenance(sessionID).catch((error) => ({
+          error: String(error),
+        }));
+        const session = getSessionState(sessions, sessionID, getDirectory(sessionID));
+        const maintenanceAction = maintenancePayload?.error
+          ? "failed"
+          : maintenancePayload?.skipped
+            ? `skipped:${maintenancePayload.reason ?? "unknown"}`
+            : maintenancePayload
+              ? "run"
+              : "none";
+        const maintenanceTrace =
+          isTraceEnabled(config) && session.lastTrace
+            ? finalizeTraceSpine(session.lastTrace, {
+                maintenance_action: maintenanceAction,
+              })
+            : null;
+        if (maintenanceTrace) {
+          storeTrace(sessionID, maintenanceTrace, session.directory);
+        }
+        if (maintenancePayload?.error) {
           log(client, "warn", "Compaction maintenance failed", {
             sessionID,
-            error: String(error),
+            error: maintenancePayload.error,
+            trace: maintenanceTrace ?? undefined,
           });
-        });
+        }
       }
     },
   };

@@ -693,6 +693,23 @@ def test_internal_routes_reject_non_local_clients():
     assert core.calls == []
 
 
+def test_internal_routes_allow_loopback_clients_and_call_core():
+    core = FakeCore()
+    client = TestClient(create_app(core), client=("127.0.0.1", 43123))
+
+    response = client.post(
+        "/internal/context/search",
+        json={
+            "query": "git commit",
+            "directory": "/home/mechrevo/.config/opencode",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["query"] == "git commit"
+    assert core.calls[0][0] == "search_context"
+
+
 def test_validate_bind_host_rejects_non_loopback_without_override(monkeypatch):
     monkeypatch.delenv("EVOMEMORY_ALLOW_REMOTE", raising=False)
 
@@ -748,6 +765,42 @@ def test_mcp_tool_calls_forward_memory_tier_filters():
         assert core.calls[0][1]["memory_tier"] == "project_memory"
         assert core.calls[0][1]["current_only"] is True
         assert core.calls[0][1]["historical_only"] is False
+
+
+def test_mcp_endpoint_accepts_sse_only_accept_header():
+    with TestClient(create_app(FakeCore()), base_url="http://127.0.0.1:8765") as client:
+        response = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 17, "method": "tools/list", "params": {}},
+            headers={"Accept": "text/event-stream"},
+        )
+
+        assert response.status_code == 200
+        assert "evomemory_search_drawers" in response.text
+
+
+def test_mcp_endpoint_accepts_wildcard_accept_header():
+    with TestClient(create_app(FakeCore()), base_url="http://127.0.0.1:8765") as client:
+        response = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 18, "method": "tools/list", "params": {}},
+            headers={"Accept": "*/*"},
+        )
+
+        assert response.status_code == 200
+        assert "evomemory_search_drawers" in response.text
+
+
+def test_mcp_endpoint_accepts_application_wildcard_plus_sse_header():
+    with TestClient(create_app(FakeCore()), base_url="http://127.0.0.1:8765") as client:
+        response = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 19, "method": "tools/list", "params": {}},
+            headers={"Accept": "application/*, text/event-stream"},
+        )
+
+        assert response.status_code == 200
+        assert "evomemory_search_drawers" in response.text
 
 
 def test_mcp_exposes_unified_evomemory_tools():

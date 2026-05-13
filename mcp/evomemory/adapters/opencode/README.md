@@ -64,6 +64,53 @@ Examples shipped with this package:
   - `autoRunMaintenanceOnCompact`: run `evomemory_run_maintenance` after compaction flush
   - `maintenanceProfile`, `maintenanceMinConfidence`, `maintenanceLimit`, `maintenanceThrottleMs`: tune compaction-triggered maintenance behavior
 
+## Security and runtime guardrails
+
+### Bridge network binding
+
+The evomemory MCP server binds to loopback (127.0.0.1) by default. To bind to a non-loopback address (e.g., 0.0.0.0 for remote access), set the environment variable `EVOMEMORY_ALLOW_REMOTE=1` before starting the server. Without this override, binding to a non-loopback host exits with a validation error.
+
+### Internal route protection
+
+All `/internal/*` routes (such as `/internal/context/search` and `/internal/session/flush`) reject requests from non-loopback clients. The server returns HTTP 403 for any request where the client IP is not 127.0.0.1. Loopback clients (127.0.0.1) are allowed and the request is forwarded to the core memory engine.
+
+### MCP tool visibility
+
+The MCP server exposes all memory tools (evomemory_status, evomemory_search_context, etc.) unconditionally. However, OpenCode may enforce client-side tool policies or permissions. The tools are discoverable via the standard MCP `tools/list` endpoint. The server does not filter tools based on client identity.
+
+### Plugin feature flags and rollback defaults
+
+The OpenCode plugin (`plugins/evomemory-opencode.js`) reads configuration from `plugins/evomemory-opencode.config.json`. Below are the current flags and their default values that control runtime behavior. Changing any flag requires restarting OpenCode to reload the plugin.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `bridgeBaseUrl` | "http://127.0.0.1:8765" | Base URL for the bridge server |
+| `searchMode` | "targeted" | One of "targeted", "core-only", "aggressive-test", "off" |
+| `minSearchChars` | 16 | Minimum characters to trigger historical search |
+| `minPersistChars` | 8 | Minimum characters to flush a message |
+| `maxInjectedChars` | 1800 | Maximum characters injected into system block |
+| `minRetrievalScore` | 0.24 | Minimum similarity score to include a result |
+| `safeExcerptChars` | 180 | Safe excerpt length for redacted text |
+| `preloadCoreMemory` | true | Preload core memory on session start |
+| `autoFlushOnMessage` | true | Flush session after each user message |
+| `searchIncludeTrace` | false | Request retrieval trace from bridge |
+| `logRetrievalTrace` | false | Emit debug logs for retrieval trace |
+| `autoFlushOnIdle` | true | Flush session when idle |
+| `autoFlushOnCompact` | true | Flush session after compaction |
+| `allowLifecycleHistoryFlush` | true | Flush lifecycle history messages |
+| `maxLifecycleHistoryMessages` | 40 | Max history messages kept |
+| `autoRunMaintenanceOnCompact` | false | Run maintenance after compaction flush |
+| `maintenanceProfile` | "light" | Maintenance profile ("light", "full") |
+| `maintenanceMinConfidence` | 0.5 | Minimum confidence for maintenance |
+| `maintenanceLimit` | 20 | Max items per maintenance run |
+| `maintenanceThrottleMs` | 300000 | Throttle between maintenance runs (ms) |
+| `requestTimeoutMs` | 5000 | Timeout for bridge HTTP requests |
+| `ensureBridgeCommand` | ["bash","-lc","systemctl --user start evomemory-bridge.service"] | Command to start the bridge if missing |
+
+### Direct fallback behavior
+
+If the bridge is unreachable or fails health checks, the plugin proceeds without historical context injection. The session continues with core memory only, and a fail-open trace is recorded. No unhandled exceptions are thrown. The `ensureBridgeCommand` is attempted on the first request to start a missing bridge.
+
 ## Why MCP first
 
 - OpenCode automatically exposes MCP tools to the model.

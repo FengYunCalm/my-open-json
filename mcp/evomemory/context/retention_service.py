@@ -46,6 +46,7 @@ class ContextRetentionService:
         before = (
             datetime.now(timezone.utc) - timedelta(days=normalized_window_days)
         ).isoformat()
+        retention_at = datetime.now(timezone.utc).isoformat()
 
         candidate_ids = list(
             dict.fromkeys(self.core.repository.list_stale_drawer_ids(before=before))
@@ -69,6 +70,43 @@ class ContextRetentionService:
                     continue
             purgeable_ids.append(drawer_id)
 
+        audit_events: list[dict[str, Any]] = []
+        for drawer_id in purgeable_ids:
+            audit_events.append(
+                self.core.governance_service.record_event(
+                    action="retention_dry_run"
+                    if normalized_dry_run
+                    else "retention_delete",
+                    target_kind="context_drawer",
+                    target_id=drawer_id,
+                    rationale=(
+                        f"Retention candidate before {before}; "
+                        f"safe={normalized_safe}; dry_run={normalized_dry_run}"
+                    ),
+                    source_record_id=drawer_id,
+                )
+            )
+        for drawer_id in retained_current_ids:
+            audit_events.append(
+                self.core.governance_service.record_event(
+                    action="retention_protect",
+                    target_kind="context_drawer",
+                    target_id=drawer_id,
+                    rationale="Safe retention protected a current context drawer",
+                    source_record_id=drawer_id,
+                )
+            )
+        for drawer_id in retained_referenced_ids:
+            audit_events.append(
+                self.core.governance_service.record_event(
+                    action="retention_protect",
+                    target_kind="context_drawer",
+                    target_id=drawer_id,
+                    rationale="Safe retention protected a belief-referenced context drawer",
+                    source_record_id=drawer_id,
+                )
+            )
+
         deleted_count = 0
         deleted_ids: list[str] = []
         if not normalized_dry_run and purgeable_ids:
@@ -77,7 +115,6 @@ class ContextRetentionService:
             )
             deleted_ids = purgeable_ids[:deleted_count]
 
-        retention_at = datetime.now(timezone.utc).isoformat()
         self.core.runtime["last_retention_at"] = retention_at
         self.core.runtime["last_retention_before"] = before
         self.core.runtime["last_retention_window_days"] = normalized_window_days
@@ -124,6 +161,9 @@ class ContextRetentionService:
             "purgeable_drawer_ids": purgeable_ids,
             "deleted_count": deleted_count,
             "deleted_drawer_ids": deleted_ids,
+            "audit_events": audit_events,
+            "rollback_available": False,
+            "rollback_location": None,
             "maintenance_summary": self.core.maintenance_summary(),
         }
 

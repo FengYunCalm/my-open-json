@@ -1,6 +1,18 @@
 from __future__ import annotations
 
 import re
+from typing import Any, Mapping
+
+
+LONG_TERM_MEMORY_TIERS = frozenset({"project_memory", "user_preference"})
+MEMORY_CONTRACT_STATUS_NOT_APPLICABLE = "not_applicable"
+MEMORY_CONTRACT_STATUS_TRUSTED = "trusted_long_term"
+MEMORY_CONTRACT_STATUS_LEGACY = "legacy_compatible"
+MEMORY_CONTRACT_STATUS_DOWNGRADED = "downgraded"
+MEMORY_CONTRACT_STATUS_REJECTED = "rejected"
+GLOBAL_MEMORY_WING = "global-memory"
+DEFAULT_MEMORY_CONFIDENCE = 0.0
+DEFAULT_MEMORY_SOURCE_COUNT = 0
 
 
 PREFERENCE_PATTERNS = [
@@ -199,9 +211,290 @@ def derive_memory_value(memory_key: str | None, text: str) -> str | None:
     return normalized_text or None
 
 
+def _coerce_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _coerce_directory(value: Any) -> str | None:
+    text = _coerce_text(value)
+    if text is None:
+        return None
+    normalized = text.replace("\\", "/").rstrip("/")
+    return normalized or "/"
+
+
+def _coerce_float(value: Any, default: float = DEFAULT_MEMORY_CONFIDENCE) -> float:
+    try:
+        return max(0.0, min(float(value), 1.0))
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_int(value: Any, default: int = DEFAULT_MEMORY_SOURCE_COUNT) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off", ""}:
+        return False
+    return True
+
+
+def _coerce_string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        raw_items = value
+    else:
+        text = _coerce_text(value)
+        if text is None:
+            return []
+        raw_items = re.split(r"[,;\n]+", text)
+    normalized = []
+    for item in raw_items:
+        text = _coerce_text(item)
+        if text:
+            normalized.append(text)
+    return normalized
+
+
+def _candidate_metadata(candidate: Mapping[str, Any]) -> Mapping[str, Any]:
+    metadata = candidate.get("metadata")
+    if isinstance(metadata, Mapping):
+        return metadata
+    return {}
+
+
+def _contract_value(
+    candidate: Mapping[str, Any], metadata: Mapping[str, Any], *keys: str
+) -> Any:
+    for key in keys:
+        value = candidate.get(key)
+        if value not in (None, ""):
+            return value
+        value = metadata.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def normalize_memory_contract(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    metadata = _candidate_metadata(candidate)
+
+    memory_tier = (
+        _coerce_text(_contract_value(candidate, metadata, "memory_tier"))
+        or "working_session"
+    ).lower()
+    directory = _coerce_directory(_contract_value(candidate, metadata, "directory"))
+    wing = _coerce_text(_contract_value(candidate, metadata, "wing"))
+    session_id = _coerce_text(_contract_value(candidate, metadata, "session_id"))
+    message_id = _coerce_text(_contract_value(candidate, metadata, "message_id"))
+    source_file = _coerce_text(_contract_value(candidate, metadata, "source_file"))
+    filed_at = _coerce_text(_contract_value(candidate, metadata, "filed_at"))
+    valid_from = _coerce_text(_contract_value(candidate, metadata, "valid_from"))
+    valid_to = _coerce_text(_contract_value(candidate, metadata, "valid_to"))
+    if valid_from is None and filed_at is not None:
+        valid_from = filed_at
+    if filed_at is None and valid_from is not None:
+        filed_at = valid_from
+
+    raw_confidence = _contract_value(candidate, metadata, "confidence")
+    raw_source_count = _contract_value(candidate, metadata, "source_count")
+    confidence = _coerce_float(raw_confidence)
+    source_count = _coerce_int(
+        raw_source_count,
+        default=1 if (source_file or session_id or message_id) else 0,
+    )
+
+    superseded_by = _coerce_text(_contract_value(candidate, metadata, "superseded_by"))
+    conflict_reason = _coerce_text(
+        _contract_value(candidate, metadata, "conflict_reason", "conflict")
+    )
+    conflict_drawer_ids = _coerce_string_list(
+        _contract_value(
+            candidate,
+            metadata,
+            "conflict_drawer_ids",
+            "conflict_drawer_id",
+            "conflicts",
+        )
+    )
+    demoted_at = _coerce_text(_contract_value(candidate, metadata, "demoted_at"))
+    is_stale = _coerce_bool(
+        _contract_value(candidate, metadata, "is_stale", "stale")
+    ) or bool(valid_to)
+    source = source_file or (f"session:{session_id}" if session_id else None)
+    defaults_applied = []
+    if raw_confidence is None:
+        defaults_applied.append("confidence")
+    if raw_source_count is None:
+        defaults_applied.append("source_count")
+
+    return {
+        "memory_tier": memory_tier,
+        "directory": directory,
+        "wing": wing,
+        "session_id": session_id,
+        "message_id": message_id,
+        "source_file": source_file,
+        "source": source,
+        "filed_at": filed_at,
+        "confidence": confidence,
+        "source_count": source_count,
+        "valid_from": valid_from,
+        "valid_to": valid_to,
+        "superseded_by": superseded_by,
+        "conflict_reason": conflict_reason,
+        "conflict_drawer_ids": conflict_drawer_ids,
+        "demoted_at": demoted_at,
+        "is_stale": is_stale,
+        "namespace": {
+            "directory": directory,
+            "wing": wing,
+            "session_id": session_id,
+            "source_file": source_file,
+            "source": source,
+        },
+        "provenance": {
+            "session_id": session_id,
+            "message_id": message_id,
+            "filed_at": filed_at,
+            "valid_from": valid_from,
+            "valid_to": valid_to,
+            "confidence": confidence,
+            "source_count": source_count,
+        },
+        "conflict": {
+            "superseded_by": superseded_by,
+            "conflict_reason": conflict_reason,
+            "conflict_drawer_ids": conflict_drawer_ids,
+            "demoted_at": demoted_at,
+            "is_stale": is_stale,
+        },
+        "defaults_applied": defaults_applied,
+    }
+
+
+def assess_memory_contract(
+    candidate: Mapping[str, Any],
+    *,
+    current_directory: str | None = None,
+    current_wing: str | None = None,
+) -> dict[str, Any]:
+    normalized = normalize_memory_contract(candidate)
+    reasons: list[str] = []
+
+    memory_tier = normalized["memory_tier"]
+    if memory_tier not in LONG_TERM_MEMORY_TIERS:
+        return {
+            **normalized,
+            "status": MEMORY_CONTRACT_STATUS_NOT_APPLICABLE,
+            "eligible_for_context": True,
+            "reasons": ["non_long_term"],
+        }
+
+    directory = normalized["directory"]
+    wing = normalized["wing"]
+    source_file = normalized["source_file"]
+    session_id = normalized["session_id"]
+    message_id = normalized["message_id"]
+
+    identity_provenance = bool(source_file and session_id and message_id)
+    partial_provenance = bool(
+        source_file
+        or session_id
+        or message_id
+        or normalized["filed_at"]
+        or normalized["valid_from"]
+    )
+    namespace_complete = bool(wing) and (
+        memory_tier != "project_memory" or bool(directory)
+    )
+
+    if current_wing and wing and wing not in {current_wing, GLOBAL_MEMORY_WING}:
+        reasons.append("foreign_wing")
+        status = MEMORY_CONTRACT_STATUS_REJECTED
+    elif (
+        memory_tier == "project_memory"
+        and current_directory
+        and directory
+        and directory != current_directory
+    ):
+        reasons.append("foreign_directory")
+        status = MEMORY_CONTRACT_STATUS_REJECTED
+    elif memory_tier == "project_memory" and not directory:
+        reasons.append("missing_directory")
+        status = (
+            MEMORY_CONTRACT_STATUS_DOWNGRADED
+            if partial_provenance
+            else MEMORY_CONTRACT_STATUS_REJECTED
+        )
+    elif not namespace_complete:
+        if not wing:
+            reasons.append("missing_wing")
+        if memory_tier == "project_memory" and not directory:
+            reasons.append("missing_directory")
+        status = (
+            MEMORY_CONTRACT_STATUS_DOWNGRADED
+            if partial_provenance
+            else MEMORY_CONTRACT_STATUS_REJECTED
+        )
+    elif identity_provenance and normalized["valid_from"]:
+        status = MEMORY_CONTRACT_STATUS_TRUSTED
+    elif partial_provenance:
+        reasons.append("missing_provenance")
+        status = MEMORY_CONTRACT_STATUS_LEGACY
+    else:
+        reasons.append("missing_provenance")
+        status = MEMORY_CONTRACT_STATUS_DOWNGRADED
+
+    if status == MEMORY_CONTRACT_STATUS_TRUSTED and (
+        normalized["superseded_by"]
+        or normalized["conflict_reason"]
+        or normalized["conflict_drawer_ids"]
+        or normalized["demoted_at"]
+        or normalized["is_stale"]
+        or normalized["valid_to"]
+    ):
+        reasons.append("conflict_or_stale_metadata")
+        status = MEMORY_CONTRACT_STATUS_DOWNGRADED
+
+    reasons = list(dict.fromkeys(reasons)) or ["trusted"]
+    return {
+        **normalized,
+        "status": status,
+        "eligible_for_context": status == MEMORY_CONTRACT_STATUS_TRUSTED,
+        "reasons": reasons,
+    }
+
+
 __all__ = [
+    "assess_memory_contract",
     "classify_memory_tier",
+    "GLOBAL_MEMORY_WING",
+    "LONG_TERM_MEMORY_TIERS",
+    "MEMORY_CONTRACT_STATUS_DOWNGRADED",
+    "MEMORY_CONTRACT_STATUS_LEGACY",
+    "MEMORY_CONTRACT_STATUS_NOT_APPLICABLE",
+    "MEMORY_CONTRACT_STATUS_REJECTED",
+    "MEMORY_CONTRACT_STATUS_TRUSTED",
     "derive_memory_key",
     "derive_memory_value",
+    "normalize_memory_contract",
     "should_skip_memory_capture",
 ]
