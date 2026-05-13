@@ -50,6 +50,7 @@
 - 若已安装 RTK 并启用 OpenCode 插件，`bash` / `shell` 命令会在执行前自动改写为 `rtk` 代理以压缩输出；内置 `read`、`grep`、`glob` 不经过 RTK，仍按专用工具优先原则使用。
 - 需要时才使用 `task`、`webfetch`、`github cli` 等工具，不为流程本身滥用。
 - 当前环境如提供 relay 协作链路、图谱工作流或项目专用 skill，只在任务真正匹配且确有收益时使用。
+- 合理使用OMO插件，Sisyphus是总指挥，它不应该进行具体工作，而是负责接受子代理信息，分发任务给子代理。Hephaestus是专门写代码的天才工匠，Prometheus是战略规划师，负责撰写计划。
 
 ## 当前环境基线
 
