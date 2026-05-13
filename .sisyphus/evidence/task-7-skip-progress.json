@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "task": 7,
+  "scenario": "Assistant progress is not promoted",
+  "source_evidence": [
+    ".sisyphus/evidence/task-7-capture-promotion.json"
+  ],
+  "observed_facts": {
+    "verified_behavior": "assistant progress/status non-promotion",
+    "notes": "Assistant ephemeral status is not captured as durable memory.",
+    "no_long_term_asset_created": true
+  },
+  "passed": true
+}

@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "task": "Task 3 memory contract namespace closeout",
+  "generated_at": "2026-05-12T11:03:40+08:00",
+  "passed": true,
+  "commands": [
+    "node plugins/tests/evomemory_replay_runner.mjs --case cross-project-leakage --summary .sisyphus/evidence/task-3-cross-project-replay-after.json",
+    "uv run pytest mcp/tests/test_evomemory_memory_contract.py"
+  ],
+  "assertions": {
+    "same_directory_project_memory_trusted": true,
+    "foreign_project_memory_excluded": true,
+    "global_fallback_foreign_project_memory_excluded": true,
+    "js_replay_cross_project_leakage_blocked": true
+  },
+  "evidence_tests": [
+    "test_same_directory_project_memory_is_trusted_long_term",
+    "test_search_context_excludes_foreign_project_memory_from_wing_and_global_fallbacks",
+    "plugins/tests/test_evomemory_opencode_helpers.mjs :: buildSystemBlock excludes foreign project memory but keeps same-directory project memory and preferences"
+  ],
+  "evidence_files": [
+    ".sisyphus/evidence/task-3-cross-project-replay-after.json"
+  ]
+}

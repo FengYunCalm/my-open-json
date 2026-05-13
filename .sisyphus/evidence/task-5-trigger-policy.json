@@ -1,0 +1,162 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-05-12T00:00:00.000Z",
+  "target_files": [
+    "plugins/evomemory-opencode.helpers.mjs",
+    "plugins/evomemory-opencode.js",
+    "plugins/evomemory-opencode.config.json"
+  ],
+  "assertions": {
+    "shouldSearch": [
+      {
+        "label": "default-targeted",
+        "searchMode": "default",
+        "prompt": "what did we decide earlier about git commit behavior in this project",
+        "expected": true,
+        "actual": true,
+        "passed": true
+      },
+      {
+        "label": "default-targeted-current-code",
+        "searchMode": "default",
+        "prompt": "please explain the current implementation in plugins/tool-forced-eval.js",
+        "expected": false,
+        "actual": false,
+        "passed": true
+      },
+      {
+        "label": "targeted-history",
+        "searchMode": "targeted",
+        "prompt": "what did we decide earlier about git commit behavior in this project",
+        "expected": true,
+        "actual": true,
+        "passed": true
+      },
+      {
+        "label": "targeted-project-learning",
+        "searchMode": "targeted",
+        "prompt": "project onboarding for this repository and architecture review",
+        "expected": true,
+        "actual": true,
+        "passed": true
+      },
+      {
+        "label": "targeted-current-code",
+        "searchMode": "targeted",
+        "prompt": "please explain the current implementation in plugins/tool-forced-eval.js",
+        "expected": false,
+        "actual": false,
+        "passed": true
+      },
+      {
+        "label": "targeted-generic",
+        "searchMode": "targeted",
+        "prompt": "drawer navigation is missing from search results",
+        "expected": false,
+        "actual": false,
+        "passed": true
+      },
+      {
+        "label": "off-history",
+        "searchMode": "off",
+        "prompt": "what did we decide earlier about git commit behavior in this project",
+        "expected": false,
+        "actual": false,
+        "passed": true
+      },
+      {
+        "label": "core-only-history",
+        "searchMode": "core-only",
+        "prompt": "what did we decide earlier about git commit behavior in this project",
+        "expected": false,
+        "actual": false,
+        "passed": true
+      },
+      {
+        "label": "aggressive-current-code",
+        "searchMode": "aggressive-test",
+        "prompt": "please explain the current implementation in plugins/tool-forced-eval.js",
+        "expected": true,
+        "actual": true,
+        "passed": true
+      },
+      {
+        "label": "aggressive-generic",
+        "searchMode": "aggressive-test",
+        "prompt": "drawer navigation is missing from search results",
+        "expected": true,
+        "actual": true,
+        "passed": true
+      },
+      {
+        "label": "unknown-normalizes-targeted",
+        "searchMode": "unknown",
+        "prompt": "please explain the current implementation in plugins/tool-forced-eval.js",
+        "expected": false,
+        "actual": false,
+        "passed": true
+      },
+      {
+        "label": "empty-normalizes-targeted",
+        "searchMode": "",
+        "prompt": "please explain the current implementation in plugins/tool-forced-eval.js",
+        "expected": false,
+        "actual": false,
+        "passed": true
+      },
+      {
+        "label": "aggressive-small-talk-ignore",
+        "searchMode": "aggressive-test",
+        "prompt": "ok",
+        "expected": false,
+        "actual": false,
+        "passed": true
+      },
+      {
+        "label": "aggressive-slash-ignore",
+        "searchMode": "aggressive-test",
+        "prompt": "/evomemory:status",
+        "expected": false,
+        "actual": false,
+        "passed": true
+      }
+    ],
+    "pluginCallCounts": [
+      {
+        "searchMode": "targeted",
+        "prompt": "what did we decide earlier about git commit behavior in this project",
+        "expectedSearchCalls": 1,
+        "actualSearchCalls": 1,
+        "passed": true
+      },
+      {
+        "searchMode": "targeted",
+        "prompt": "please explain the current implementation in plugins/tool-forced-eval.js",
+        "expectedSearchCalls": 0,
+        "actualSearchCalls": 0,
+        "passed": true
+      },
+      {
+        "searchMode": "aggressive-test",
+        "prompt": "please explain the current implementation in plugins/tool-forced-eval.js",
+        "expectedSearchCalls": 1,
+        "actualSearchCalls": 1,
+        "passed": true
+      },
+      {
+        "searchMode": "off",
+        "prompt": "what did we decide earlier about git commit behavior in this project",
+        "expectedSearchCalls": 0,
+        "actualSearchCalls": 0,
+        "passed": true
+      },
+      {
+        "searchMode": "core-only",
+        "prompt": "what did we decide earlier about git commit behavior in this project",
+        "expectedSearchCalls": 0,
+        "actualSearchCalls": 0,
+        "passed": true
+      }
+    ]
+  }
+}

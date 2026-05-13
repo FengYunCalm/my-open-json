@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "task": "Task 4 budgeted safe injection",
+  "generated_at": "2026-05-12T11:30:00+08:00",
+  "passed": true,
+  "command": "node --test plugins/tests/test_evomemory_opencode_helpers.mjs",
+  "test": "buildSystemBlock truncates within total and per-item budgets without dropping top sourced items",
+  "budget": {
+    "max_chars": 620,
+    "actual_chars": 597
+  },
+  "assertions": {
+    "block_within_budget": true,
+    "top_core_memory_preserved": true,
+    "top_search_hit_preserved": true,
+    "low_priority_oversized_memory_removed": true,
+    "long_excerpt_truncated": true,
+    "source_labels_present": true
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "task": 7,
+  "scenario": "Durable preference is extracted and promoted",
+  "source_evidence": [
+    ".sisyphus/evidence/task-7-capture-promotion.json",
+    ".sisyphus/evidence/task-7-replay-capture.json"
+  ],
+  "observed_facts": {
+    "verified_behavior": "user preference promotion",
+    "notes": "User language preference correctly captured and injected.",
+    "replay_gate_passed": true,
+    "promotion_fields_present": [
+      "key/value",
+      "tier=user_preference",
+      "provenance",
+      "confidence"
+    ]
+  },
+  "passed": true
+}

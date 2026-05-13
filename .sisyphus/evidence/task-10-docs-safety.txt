@@ -1,0 +1,21 @@
+Docs Safety Scan Report - Task 10
+Generated after rerunning `node plugins/tests/evomemory_replay_runner.mjs --summary .sisyphus/evidence/task-10-final-replay.json`
+
+Scans performed against `.sisyphus/evidence/task-10-final-replay.json`:
+1. field-name scan for `"session_id"`
+2. field-name scan for `"directory"`
+3. secret-style scan for `bearer`, `api_key`, `private_key`, and `password`
+4. contextual read of the matching replay trace entries and comparison/gate fields
+
+Results:
+- Scan 1 found 7 `session_id` matches.
+- Scan 2 found 7 `directory` matches.
+- The matching values appear inside offline replay `trace` objects such as `ses_replay_*` and `/fixtures/project-*`.
+- These are synthetic offline fixture identifiers from replay test data.
+- They are not private runtime session IDs, not provider tokens, and not machine-specific secrets.
+- Scan 3 found no bearer/API-key/private-key/password-style secrets.
+
+Conclusion:
+- The replay evidence intentionally contains synthetic fixture identifiers for offline test coverage.
+- No bearer token, API key, private key, password-style secret, or other provider credential was found.
+- This file is safe for version control and public sharing in its current synthetic-fixture form.

@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "task": "Task 3 memory contract legacy compatibility closeout",
+  "generated_at": "2026-05-12T10:41:32+08:00",
+  "passed": true,
+  "command": "uv run pytest mcp/tests/test_evomemory_memory_contract.py",
+  "assertions": {
+    "legacy_missing_provenance_downgraded_or_compatible": true,
+    "legacy_not_high_confidence_trusted": true,
+    "superseded_metadata_preserved": true,
+    "missing_namespace_long_term_not_trusted": true
+  },
+  "evidence_tests": [
+    "test_legacy_long_term_missing_provenance_is_safe_but_not_trusted",
+    "test_missing_namespace_and_provenance_is_rejected_for_long_term_memory",
+    "test_supersession_and_conflict_metadata_are_preserved"
+  ]
+}

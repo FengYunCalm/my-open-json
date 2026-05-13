@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "task": "Build replay benchmark baseline for agent gets smarter over time",
+  "offline": true,
+  "runner": "plugins/tests/evomemory_replay_runner.mjs",
+  "fixtures": "plugins/tests/fixtures/evomemory-replay/cases.json",
+  "summary": ".sisyphus/evidence/evomemory-replay-summary.json",
+  "network_access": "not used; runner uses deterministic fake fetch responses",
+  "live_llm_calls": false,
+  "provider_credentials_required": false,
+  "verified_commands": [
+    "node --test plugins/tests/*evomemory*.mjs",
+    "uv run pytest mcp/tests/test_evomemory*.py",
+    "node plugins/tests/evomemory_replay_runner.mjs --summary .sisyphus/evidence/evomemory-replay-summary.json"
+  ],
+  "known_environment_limitations": [
+    "lsp_diagnostics could not run because typescript-language-server is not installed",
+    "bare pytest is not installed; uv run pytest is available and passed"
+  ]
+}

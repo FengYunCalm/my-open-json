@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "task": 6,
+  "scenario": "Same-namespace exact key outranks vague semantic hit",
+  "source_evidence": [
+    ".sisyphus/evidence/task-6-ranking-trace.json",
+    ".sisyphus/evidence/task-6-replay-ranking.json"
+  ],
+  "observed_facts": {
+    "selected_drawer_id": "drawer_primary",
+    "selected_score": 0.95,
+    "rejected_candidates": [
+      {
+        "drawer_id": "drawer_semantic_only",
+        "score": 0.35,
+        "reasons": [
+          "low_overlap",
+          "semantic_only"
+        ]
+      }
+    ],
+    "replay_gate_passed": true
+  },
+  "passed": true
+}

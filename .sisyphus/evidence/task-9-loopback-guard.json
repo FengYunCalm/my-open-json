@@ -1,0 +1,1 @@
+{"allowed_loopback_status":200,"core_call_blocked_on_rejection":true,"non_loopback_status":403,"pytest_command":"uv run pytest mcp/tests/test_evomemory_mcp_server.py","status":"pass","task":9}

@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "task": 5,
+  "scenario": "Targeted historical search fires for prior-decision prompt",
+  "source_evidence": [
+    ".sisyphus/evidence/task-5-trigger-policy.json",
+    ".sisyphus/evidence/task-10-final-replay.json"
+  ],
+  "observed_facts": {
+    "trigger_policy": {
+      "label": "targeted-history",
+      "prompt": "what did we decide earlier about git commit behavior in this project",
+      "expected_should_search": true,
+      "actual_should_search": true,
+      "passed": true
+    },
+    "replay_reference": {
+      "case_id": "positive-project-decision-recall",
+      "expected_hit": true,
+      "source_and_reason_present": true
+    }
+  },
+  "passed": true
+}

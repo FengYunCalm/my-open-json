@@ -1,0 +1,454 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-05-12T00:00:00.000Z",
+  "runner": "plugins/tests/evomemory_replay_runner.mjs",
+  "offline": true,
+  "fixtures": "plugins/tests/fixtures/evomemory-replay/cases.json",
+  "metrics": {
+    "total_cases": 7,
+    "passed_cases": 7,
+    "failed_cases": 0,
+    "expected_hit_rate": 1,
+    "false_positive_injection_rate": 0,
+    "unsafe_injection_count": 0,
+    "cross_namespace_leakage_count": 0,
+    "added_latency_ms": {
+      "total": 22.863,
+      "average": 3.266,
+      "max": 16.025
+    },
+    "injected_budget": {
+      "total_characters": 1576,
+      "average_characters": 225.143,
+      "total_estimated_tokens": 396,
+      "average_estimated_tokens": 56.571
+    },
+    "injection_eligible_cases": 4,
+    "injected_cases": 4
+  },
+  "failed_cases": [],
+  "comparison": {
+    "baseline_source": {
+      "label": "task_1_replay_baseline_from_learnings",
+      "file": ".sisyphus/notepads/optimize-evomemory-agent-learning/learnings.md",
+      "evidence_section": "2026-05-12T00:51:59+08:00 Task 1 Replay Baseline",
+      "note": "Only historically verified Task 1 fields are populated below. Unrecovered baseline fields are intentionally omitted instead of being fabricated."
+    },
+    "before": {
+      "label": "before_optimization_task_1_baseline",
+      "metrics": {
+        "total_cases": 7,
+        "expected_hit_rate": 1,
+        "false_positive_injection_rate": 0.3333,
+        "unsafe_injection_count": 0,
+        "cross_namespace_leakage_count": 1,
+        "injected_budget": {
+          "total_characters": 1679,
+          "total_estimated_tokens": 421
+        }
+      }
+    },
+    "after": {
+      "label": "after_tasks_2_to_9_final",
+      "metrics": {
+        "total_cases": 7,
+        "passed_cases": 7,
+        "failed_cases": 0,
+        "expected_hit_rate": 1,
+        "false_positive_injection_rate": 0,
+        "unsafe_injection_count": 0,
+        "cross_namespace_leakage_count": 0,
+        "added_latency_ms": {
+          "total": 22.863,
+          "average": 3.266,
+          "max": 16.025
+        },
+        "injected_budget": {
+          "total_characters": 1576,
+          "average_characters": 225.143,
+          "total_estimated_tokens": 396,
+          "average_estimated_tokens": 56.571
+        },
+        "injection_eligible_cases": 4,
+        "injected_cases": 4
+      }
+    },
+    "candidate_regressions": []
+  },
+  "gate_evaluation": {
+    "all_passed": true,
+    "policy_sources": [
+      ".sisyphus/plans/optimize-evomemory-agent-learning.md",
+      "mcp/evomemory/README.md",
+      "plugins/evomemory-opencode.config.json"
+    ],
+    "checks": {
+      "expected_hit_rate": {
+        "operator": ">=",
+        "threshold": 0.8,
+        "observed": 1,
+        "passed": true
+      },
+      "false_positive_injection_rate": {
+        "operator": "<=",
+        "threshold": 0.1,
+        "observed": 0,
+        "passed": true
+      },
+      "unsafe_injection_count": {
+        "operator": "==",
+        "threshold": 0,
+        "observed": 0,
+        "passed": true
+      },
+      "cross_namespace_leakage_count": {
+        "operator": "==",
+        "threshold": 0,
+        "observed": 0,
+        "passed": true
+      },
+      "added_latency_ms_max": {
+        "operator": "<=",
+        "threshold": 5000,
+        "observed": 16.025,
+        "passed": true,
+        "threshold_source": "plugins/evomemory-opencode.config.json"
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "positive-user-preference-recall",
+      "description": "Recall a stable user preference when the prompt asks about reply language.",
+      "passed": true,
+      "injected": true,
+      "expected_hit_count": 1,
+      "observed_expected_hit_count": 1,
+      "false_positive_count": 0,
+      "unsafe_injection": false,
+      "cross_namespace_leakage": false,
+      "added_latency_ms": 3.641,
+      "injected_budget": {
+        "characters": 286,
+        "estimated_tokens": 72
+      },
+      "trace": {
+        "session_id": "ses_replay_user_pref",
+        "directory": "/fixtures/project-alpha",
+        "wing": "opencode",
+        "trigger_decision": {
+          "should_persist": true,
+          "should_search": true,
+          "prompt_chars": 75
+        },
+        "search_type": "context_search",
+        "candidate_count": 1,
+        "selected_count": 0,
+        "chosen_results": [],
+        "injection_budget_used": {
+          "characters": 286,
+          "estimated_tokens": 72
+        },
+        "redactions": [],
+        "write_capture_decision": "message_flush_queued",
+        "maintenance_action": "none",
+        "latency_ms": 3,
+        "request_timeout_ms": 15,
+        "timeout_fallback_reason": null,
+        "status": "ok"
+      },
+      "search_calls": 1,
+      "flush_calls": 1,
+      "failures": []
+    },
+    {
+      "id": "positive-project-decision-recall",
+      "description": "Recall a project decision when the prompt asks about prior git behavior.",
+      "passed": true,
+      "injected": true,
+      "expected_hit_count": 2,
+      "observed_expected_hit_count": 2,
+      "false_positive_count": 0,
+      "unsafe_injection": false,
+      "cross_namespace_leakage": false,
+      "added_latency_ms": 1.026,
+      "injected_budget": {
+        "characters": 587,
+        "estimated_tokens": 147
+      },
+      "trace": {
+        "session_id": "ses_replay_project_decision",
+        "directory": "/fixtures/project-alpha",
+        "wing": "opencode",
+        "trigger_decision": {
+          "should_persist": true,
+          "should_search": true,
+          "prompt_chars": 69
+        },
+        "search_type": "context_search",
+        "candidate_count": 1,
+        "selected_count": 1,
+        "chosen_results": [
+          {
+            "id": "drawer_project_decision",
+            "reason": "keyword(git, commit), tier(project)"
+          }
+        ],
+        "injection_budget_used": {
+          "characters": 587,
+          "estimated_tokens": 147
+        },
+        "redactions": [
+          {
+            "label": "memory_text",
+            "count": 1
+          }
+        ],
+        "write_capture_decision": "message_flush_queued",
+        "maintenance_action": "none",
+        "latency_ms": 1,
+        "request_timeout_ms": 15,
+        "timeout_fallback_reason": null,
+        "status": "ok"
+      },
+      "search_calls": 1,
+      "flush_calls": 1,
+      "failures": []
+    },
+    {
+      "id": "negative-no-memory-no-injection",
+      "description": "Keep generic current-code prompts local in targeted mode.",
+      "passed": true,
+      "injected": false,
+      "expected_hit_count": 0,
+      "observed_expected_hit_count": 0,
+      "false_positive_count": 0,
+      "unsafe_injection": false,
+      "cross_namespace_leakage": false,
+      "added_latency_ms": 0.917,
+      "injected_budget": {
+        "characters": 0,
+        "estimated_tokens": 0
+      },
+      "trace": {
+        "session_id": "ses_replay_empty",
+        "directory": "/fixtures/project-alpha",
+        "wing": "opencode",
+        "trigger_decision": {
+          "should_persist": true,
+          "should_search": false,
+          "prompt_chars": 72
+        },
+        "search_type": "context_search",
+        "candidate_count": 0,
+        "selected_count": 0,
+        "chosen_results": [],
+        "injection_budget_used": {
+          "characters": 0,
+          "estimated_tokens": 0
+        },
+        "redactions": [],
+        "write_capture_decision": "message_flush_queued",
+        "maintenance_action": "none",
+        "latency_ms": 1,
+        "request_timeout_ms": 15,
+        "timeout_fallback_reason": "search_not_triggered",
+        "status": "fail-open"
+      },
+      "search_calls": 0,
+      "flush_calls": 1,
+      "failures": []
+    },
+    {
+      "id": "prompt-injection-memory",
+      "description": "Render metadata but sanitize malicious historical text.",
+      "passed": true,
+      "injected": true,
+      "expected_hit_count": 2,
+      "observed_expected_hit_count": 2,
+      "false_positive_count": 0,
+      "unsafe_injection": false,
+      "cross_namespace_leakage": false,
+      "added_latency_ms": 0.501,
+      "injected_budget": {
+        "characters": 410,
+        "estimated_tokens": 103
+      },
+      "trace": {
+        "session_id": "ses_replay_prompt_injection",
+        "directory": "/fixtures/project-alpha",
+        "wing": "opencode",
+        "trigger_decision": {
+          "should_persist": true,
+          "should_search": true,
+          "prompt_chars": 67
+        },
+        "search_type": "context_search",
+        "candidate_count": 1,
+        "selected_count": 1,
+        "chosen_results": [
+          {
+            "id": "drawer_prompt_injection",
+            "reason": "keyword(onboarding)"
+          }
+        ],
+        "injection_budget_used": {
+          "characters": 410,
+          "estimated_tokens": 103
+        },
+        "redactions": [
+          {
+            "label": "memory_text",
+            "count": 1
+          }
+        ],
+        "write_capture_decision": "message_flush_queued",
+        "maintenance_action": "none",
+        "latency_ms": 0,
+        "request_timeout_ms": 15,
+        "timeout_fallback_reason": null,
+        "status": "ok"
+      },
+      "search_calls": 1,
+      "flush_calls": 1,
+      "failures": []
+    },
+    {
+      "id": "bridge-timeout-fail-open",
+      "description": "A stalled bridge request should fail open without injecting memory.",
+      "passed": true,
+      "injected": false,
+      "expected_hit_count": 0,
+      "observed_expected_hit_count": 0,
+      "false_positive_count": 0,
+      "unsafe_injection": false,
+      "cross_namespace_leakage": false,
+      "added_latency_ms": 16.025,
+      "injected_budget": {
+        "characters": 0,
+        "estimated_tokens": 0
+      },
+      "trace": {
+        "session_id": "ses_replay_timeout",
+        "directory": "/fixtures/project-alpha",
+        "wing": "opencode",
+        "trigger_decision": {
+          "should_persist": true,
+          "should_search": true,
+          "prompt_chars": 51
+        },
+        "search_type": "context_search",
+        "candidate_count": 0,
+        "selected_count": 0,
+        "chosen_results": [],
+        "injection_budget_used": {
+          "characters": 0,
+          "estimated_tokens": 0
+        },
+        "redactions": [],
+        "write_capture_decision": "message_flush_queued",
+        "maintenance_action": "none",
+        "latency_ms": 16,
+        "request_timeout_ms": 15,
+        "timeout_fallback_reason": "bridge_timeout",
+        "status": "fail-open"
+      },
+      "search_calls": 1,
+      "flush_calls": 1,
+      "failures": []
+    },
+    {
+      "id": "duplicate-memory-dedupe",
+      "description": "Duplicate memories reveal the current baseline dedupe behavior.",
+      "passed": true,
+      "injected": true,
+      "expected_hit_count": 1,
+      "observed_expected_hit_count": 1,
+      "false_positive_count": 0,
+      "unsafe_injection": false,
+      "cross_namespace_leakage": false,
+      "added_latency_ms": 0.478,
+      "injected_budget": {
+        "characters": 293,
+        "estimated_tokens": 74
+      },
+      "trace": {
+        "session_id": "ses_replay_duplicate",
+        "directory": "/fixtures/project-alpha",
+        "wing": "opencode",
+        "trigger_decision": {
+          "should_persist": true,
+          "should_search": true,
+          "prompt_chars": 65
+        },
+        "search_type": "context_search",
+        "candidate_count": 2,
+        "selected_count": 0,
+        "chosen_results": [],
+        "injection_budget_used": {
+          "characters": 293,
+          "estimated_tokens": 74
+        },
+        "redactions": [],
+        "write_capture_decision": "message_flush_queued",
+        "maintenance_action": "none",
+        "latency_ms": 0,
+        "request_timeout_ms": 15,
+        "timeout_fallback_reason": null,
+        "status": "ok"
+      },
+      "search_calls": 1,
+      "flush_calls": 1,
+      "failures": []
+    },
+    {
+      "id": "cross-project-leakage",
+      "description": "Foreign project memory should not be injected into the current namespace.",
+      "passed": true,
+      "injected": false,
+      "expected_hit_count": 0,
+      "observed_expected_hit_count": 0,
+      "false_positive_count": 0,
+      "unsafe_injection": false,
+      "cross_namespace_leakage": false,
+      "added_latency_ms": 0.275,
+      "injected_budget": {
+        "characters": 0,
+        "estimated_tokens": 0
+      },
+      "trace": {
+        "session_id": "ses_replay_cross_project",
+        "directory": "/fixtures/project-alpha",
+        "wing": "opencode",
+        "trigger_decision": {
+          "should_persist": true,
+          "should_search": true,
+          "prompt_chars": 56
+        },
+        "search_type": "context_search",
+        "candidate_count": 1,
+        "selected_count": 0,
+        "chosen_results": [],
+        "injection_budget_used": {
+          "characters": 0,
+          "estimated_tokens": 0
+        },
+        "redactions": [
+          {
+            "label": "memory_text",
+            "count": 1
+          }
+        ],
+        "write_capture_decision": "message_flush_queued",
+        "maintenance_action": "none",
+        "latency_ms": 1,
+        "request_timeout_ms": 15,
+        "timeout_fallback_reason": null,
+        "status": "ok"
+      },
+      "search_calls": 1,
+      "flush_calls": 1,
+      "failures": []
+    }
+  ]
+}

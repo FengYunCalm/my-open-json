@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "task": 6,
+  "scenario": "Stale conflicting memory is not injected",
+  "source_evidence": [
+    ".sisyphus/evidence/task-6-ranking-trace.json",
+    ".sisyphus/evidence/task-6-replay-ranking.json"
+  ],
+  "observed_facts": {
+    "rejected_candidates": [
+      {
+        "drawer_id": "drawer_stale",
+        "score": 0.2,
+        "reasons": [
+          "stale"
+        ]
+      },
+      {
+        "drawer_id": "drawer_superseded",
+        "score": 0.1,
+        "reasons": [
+          "superseded"
+        ]
+      }
+    ],
+    "current_fact_only": true,
+    "replay_gate_passed": true
+  },
+  "passed": true
+}

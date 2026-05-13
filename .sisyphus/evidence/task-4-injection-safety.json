@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "task": "Task 4 malicious memory cannot become instruction",
+  "generated_at": "2026-05-12T11:30:00+08:00",
+  "passed": true,
+  "command": "node --test plugins/tests/test_evomemory_opencode_helpers.mjs plugins/tests/test_evomemory_opencode.mjs",
+  "tests": [
+    "buildSystemBlock ignores bridge system_block and redacts role-labeled instruction text",
+    "does not trust bridge-provided system_block and renders a local safe block"
+  ],
+  "rendered_block": {
+    "actual_chars": 536,
+    "contains_redaction_marker": true
+  },
+  "assertions": {
+    "bridge_system_block_ignored": true,
+    "malicious_memory_redacted": true,
+    "raw_role_labels_removed": true,
+    "safe_policy_text_preserved": true,
+    "safe_excerpt_text_preserved": true,
+    "no_unsafe_instruction_phrases": true
+  }
+}

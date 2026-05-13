@@ -1,0 +1,173 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-05-12T00:00:00.000Z",
+  "runner": "plugins/tests/evomemory_replay_runner.mjs",
+  "offline": true,
+  "fixtures": "plugins/tests/fixtures/evomemory-replay/cases.json",
+  "metrics": {
+    "total_cases": 1,
+    "passed_cases": 0,
+    "failed_cases": 1,
+    "expected_hit_rate": 1,
+    "false_positive_injection_rate": 1,
+    "unsafe_injection_count": 0,
+    "cross_namespace_leakage_count": 1,
+    "added_latency_ms": {
+      "total": 2.027,
+      "average": 2.027,
+      "max": 2.027
+    },
+    "injected_budget": {
+      "total_characters": 420,
+      "average_characters": 420,
+      "total_estimated_tokens": 105,
+      "average_estimated_tokens": 105
+    },
+    "injection_eligible_cases": 0,
+    "injected_cases": 1
+  },
+  "failed_cases": [
+    {
+      "id": "cross-project-leakage",
+      "description": "Foreign project memory should not be injected into the current namespace.",
+      "failures": [
+        {
+          "kind": "injection_expectation",
+          "expected": false,
+          "actual": true
+        },
+        {
+          "kind": "unexpected_hit",
+          "needle": "deployment_policy=project_beta_only"
+        },
+        {
+          "kind": "unexpected_hit",
+          "needle": "drawer=drawer_project_beta_policy"
+        },
+        {
+          "kind": "cross_namespace_leakage",
+          "expected": false,
+          "actual": true
+        }
+      ]
+    }
+  ],
+  "comparison": {
+    "before": {
+      "label": "before_optimization_task_1_baseline",
+      "metrics": {
+        "total_cases": 1,
+        "passed_cases": 0,
+        "failed_cases": 1,
+        "expected_hit_rate": 1,
+        "false_positive_injection_rate": 1,
+        "unsafe_injection_count": 0,
+        "cross_namespace_leakage_count": 1,
+        "added_latency_ms": {
+          "total": 2.027,
+          "average": 2.027,
+          "max": 2.027
+        },
+        "injected_budget": {
+          "total_characters": 420,
+          "average_characters": 420,
+          "total_estimated_tokens": 105,
+          "average_estimated_tokens": 105
+        },
+        "injection_eligible_cases": 0,
+        "injected_cases": 1
+      }
+    },
+    "after": {
+      "label": "after_optimization_not_yet_run",
+      "metrics": null
+    },
+    "candidate_regressions": [
+      {
+        "metric": "false_positive_injection_rate",
+        "baseline": 1,
+        "reason": "At least one no-memory or filtered case injected context."
+      },
+      {
+        "metric": "cross_namespace_leakage_count",
+        "baseline": 1,
+        "reason": "Foreign-directory memory was injected into current context."
+      }
+    ]
+  },
+  "cases": [
+    {
+      "id": "cross-project-leakage",
+      "description": "Foreign project memory should not be injected into the current namespace.",
+      "passed": false,
+      "injected": true,
+      "expected_hit_count": 0,
+      "observed_expected_hit_count": 0,
+      "false_positive_count": 2,
+      "unsafe_injection": false,
+      "cross_namespace_leakage": true,
+      "added_latency_ms": 2.027,
+      "injected_budget": {
+        "characters": 420,
+        "estimated_tokens": 105
+      },
+      "trace": {
+        "session_id": "ses_replay_cross_project",
+        "directory": "/fixtures/project-alpha",
+        "wing": "opencode",
+        "trigger_decision": {
+          "should_persist": true,
+          "should_search": true,
+          "prompt_chars": 56
+        },
+        "search_type": "context_search",
+        "candidate_count": 1,
+        "selected_count": 1,
+        "chosen_results": [
+          {
+            "id": "drawer_project_beta_policy",
+            "reason": ""
+          }
+        ],
+        "injection_budget_used": {
+          "characters": 420,
+          "estimated_tokens": 105
+        },
+        "redactions": [
+          {
+            "label": "memory_text",
+            "count": 1
+          }
+        ],
+        "write_capture_decision": "message_flush_queued",
+        "maintenance_action": "none",
+        "latency_ms": 2,
+        "request_timeout_ms": 15,
+        "timeout_fallback_reason": null,
+        "status": "ok"
+      },
+      "search_calls": 1,
+      "flush_calls": 1,
+      "failures": [
+        {
+          "kind": "injection_expectation",
+          "expected": false,
+          "actual": true
+        },
+        {
+          "kind": "unexpected_hit",
+          "needle": "deployment_policy=project_beta_only"
+        },
+        {
+          "kind": "unexpected_hit",
+          "needle": "drawer=drawer_project_beta_policy"
+        },
+        {
+          "kind": "cross_namespace_leakage",
+          "expected": false,
+          "actual": true
+        }
+      ]
+    }
+  ]
+}
