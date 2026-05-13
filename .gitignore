@@ -28,3 +28,6 @@ mcp/evomemory.egg-info/
 bun.lock
 .worktrees/
 opencode.json
+.sisyphus/boulder.json
+.sisyphus/run-continuation/
+oh-my-openagent.json.bak.*
