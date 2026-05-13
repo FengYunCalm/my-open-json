@@ -332,7 +332,8 @@ test("routes history, docs, and GitHub pattern tasks to the right MCP shortlists
   const codeInjected = codeOutput.system.at(-1) ?? "";
   assert.match(codeInjected, /Detected intent: `local-code`/);
   assert.match(codeInjected, /- `glob`:/);
-  assert.doesNotMatch(codeInjected, /`evomemory_\*`/);
+  assert.match(codeInjected, /### EvoMemory Priority/);
+  assert.match(codeInjected, /`evomemory_\*`/);
 
   await plugin["chat.message"](
     { sessionID: "session-nontrivial-code" },
@@ -377,7 +378,7 @@ test("only adds tool guidance for MCPs that still opt in", async () => {
   );
   assert.match(
     evomemoryOutput.description,
-    /Prefer this early in non-trivial project onboarding, audits, architecture reviews, cross-file changes, debugging, refactors, or local code work/i,
+    /Prefer this early in project onboarding, audits, architecture reviews, debugging, refactors, reasoning, and local code work/i,
   );
 
   const evomemoryFeedbackOutput = {
@@ -1442,7 +1443,7 @@ test("suppresses thinking MCP gate only for the first strong reasoning match", a
       const secondInjected = secondOutput.system.at(-1) ?? "";
       assert.match(secondInjected, /### Skill Gate/);
       assert.match(secondInjected, /`writing-plans`/);
-      assert.match(secondInjected, /### MCP Gate/);
+      assert.match(secondInjected, /Suggested MCP tools for this task:/);
       assert.match(secondInjected, /`thinking_\*`/);
     },
   );

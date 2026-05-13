@@ -52,7 +52,7 @@ const DEFAULT_CONFIG = {
 const TOOL_DESCRIPTION_HINTS = [
   {
     match: (toolID) => toolID === "evomemory_search_context",
-    note: "Prefer this early in non-trivial project onboarding, audits, architecture reviews, cross-file changes, debugging, refactors, or local code work where prior decisions, stable constraints, earlier fixes, or historical feedback may matter. Current files remain the source of truth.",
+    note: "Prefer this early in project onboarding, audits, architecture reviews, debugging, refactors, reasoning, and local code work where prior decisions, stable constraints, earlier fixes, or historical feedback may matter. Current files remain the source of truth.",
   },
   {
     match: (toolID) => toolID === "evomemory_record_feedback",
@@ -1104,7 +1104,7 @@ function buildEvomemoryPriorityLines(mcpNames, routing, config) {
 
   return [
     "### EvoMemory Priority",
-    "- Use `evomemory_search_context` early for non-trivial project learning, audits, architecture decisions, or cross-file changes when prior decisions or stable constraints may matter.",
+    "- Use `evomemory_search_context` early for project learning, audits, architecture decisions, debugging, reasoning, or local code work when prior decisions, stable constraints, or earlier fixes may matter.",
     "- Use `evomemory_record_feedback` for durable corrections, but treat current files and current docs as the source of truth for implementation facts.",
     "",
   ];

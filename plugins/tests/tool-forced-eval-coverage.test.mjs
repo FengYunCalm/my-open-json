@@ -108,3 +108,18 @@ test('mcp coverage matrix stays stable for high-value routing cases', () => {
     )
   }
 })
+
+test('evomemory is shortlisted for ordinary local-code and reasoning prompts', () => {
+  const catalog = loadInstalledMcpCatalog()
+
+  for (const text of [
+    '请解释一下当前这个插件文件是怎么实现的',
+    '帮我分析这个实现方案为什么会失败',
+  ]) {
+    const routing = buildTaskRouting(text, catalog, { shortlistLimit: 3 }, [])
+    assert.ok(
+      routing.mcps.some((mcp) => mcp.name === 'evomemory'),
+      `expected evomemory shortlist entry for: ${text}`,
+    )
+  }
+})

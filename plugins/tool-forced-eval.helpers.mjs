@@ -154,9 +154,7 @@ export function isProjectContextTask(text = '') {
 function shouldPreferEvomemory(text = '', intentKey = 'unclear') {
   if (['memory-maintenance', 'history'].includes(intentKey)) return true
   if (isProjectContextTask(text)) return true
-  if (['local-code', 'reasoning'].includes(intentKey)) {
-    return matchesAny(NONTRIVIAL_LOCAL_CODE_HINTS, text)
-  }
+  if (['local-code', 'reasoning'].includes(intentKey)) return true
   return false
 }
 
@@ -273,7 +271,7 @@ export function buildTaskRouting(text = '', visibleMcpCatalog = [], config = {},
     case 'local-code':
       summary = projectContextTask
         ? 'Inspect current code with native tools, and use EvoMemory for prior decisions or stable constraints before project learning, audit, or architecture conclusions.'
-        : 'Inspect the local codebase with native workspace tools before reaching for MCPs.'
+        : 'Inspect current code with native tools, and use EvoMemory when earlier decisions, stable constraints, prior fixes, or historical feedback may affect the answer.'
       nativeTools.push(buildNativeTool('glob', 'Find files by name or path pattern.'))
       nativeTools.push(buildNativeTool('grep', 'Search repository contents for symbols, strings, or patterns.'))
       nativeTools.push(buildNativeTool('read', 'Open only the relevant files and sections.'))
@@ -283,7 +281,7 @@ export function buildTaskRouting(text = '', visibleMcpCatalog = [], config = {},
       nativeTools.push(buildNativeTool('bash', 'Run direct local commands when dedicated read/search tools are not a better fit.'))
       break
     case 'reasoning':
-      summary = 'Use structured reasoning only when it materially helps a multi-step decision.'
+      summary = 'Use structured reasoning when it helps the decision, and bring in EvoMemory when prior decisions, constraints, or earlier fixes could change the conclusion.'
       break
     default:
       nativeTools.push(buildNativeTool('glob', 'Find files by name when the task starts with repo exploration.'))
